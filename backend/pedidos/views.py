@@ -2,7 +2,7 @@ import random
 from datetime import timedelta
 
 from django.db import transaction
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -10,17 +10,25 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from carta.models import Plato
+from carta.models import CambioEstado, Plato
 from carta.views import emitir_plato
 from config.tiempo_real import emitir
 from cuentas.permisos import TODOS, DelRestaurante, Roles
 
-from .models import ItemPedido, Mesa, MensajeWhatsApp, Pedido
+from .models import EventoPedido, ItemPedido, Mesa, MensajeWhatsApp, Pedido
 from .serializers import (
-    MensajeWhatsAppSerializer, MesaSerializer, PedidoNuevoSerializer, PedidoSerializer,
+    CON_MESA, AgregarItemsSerializer, MensajeWhatsAppSerializer, MesaSerializer,
+    PedidoDetalleSerializer, PedidoNuevoSerializer, PedidoSerializer, buscar_mesa, validar_items,
 )
 
 ACTIVOS = [Pedido.Estado.RECIBIDO, Pedido.Estado.EN_PREPARACION, Pedido.Estado.LISTO]
+Evento = EventoPedido.Tipo
+
+TEXTO_ESTADO = {
+    Pedido.Estado.EN_PREPARACION: "La cocina empezó a prepararlo",
+    Pedido.Estado.LISTO: "Listo para servir",
+    Pedido.Estado.ENTREGADO: "Servido / entregado al cliente",
+}
 
 
 def pedidos_qs():
@@ -29,21 +37,91 @@ def pedidos_qs():
     )
 
 
+def resumen(items, platos):
+    return ", ".join(f"{i['cantidad']} × {platos[i['plato']].nombre}" for i in items)
+
+
+def anexar_items(pedido, items, usuario, agregado):
+    """Crea los ítems y descuenta porciones bloqueando las filas de los platos."""
+    platos = {p.id: p for p in Plato.objects.select_for_update().select_related(
+        "restaurante", "alternativo").filter(id__in=[i["plato"] for i in items])}
+    for i in items:
+        p = platos[i["plato"]]
+        if p.porciones_restantes is not None and i["cantidad"] > p.porciones_restantes:
+            raise ValidationError({"items": [f"De {p.nombre} solo quedan {p.porciones_restantes}."]})
+        ItemPedido.objects.create(
+            pedido=pedido, plato=p, cantidad=i["cantidad"], precio_unitario=p.precio,
+            costo_unitario=p.costo, nota=i.get("nota", ""), agregado=agregado,
+        )
+        emitir_plato(p, p.descontar(i["cantidad"]))
+    return platos
+
+
+def devolver_porciones(plato_id, cantidad):
+    """Devuelve porciones de un plato quitado o cancelado.
+
+    Si el plato pasó a "por agotarse" o "agotado" de forma automática, recupera el estado
+    que le corresponde; si lo marcó la cocina a mano, se respeta su decisión.
+    """
+    p = Plato.objects.select_for_update().select_related("restaurante", "alternativo").get(pk=plato_id)
+    if p.porciones_restantes is None:
+        return
+    p.porciones_restantes += cantidad
+    p.save(update_fields=["porciones_restantes"])
+    ultimo = p.cambios.first()
+    cambio = None
+    if p.estado != Plato.Estado.DISPONIBLE and ultimo and ultimo.origen == CambioEstado.Origen.AUTOMATICO:
+        cambio = p.cambiar_estado(p.estado_segun_porciones(), CambioEstado.Origen.AUTOMATICO)
+    emitir_plato(p, cambio)
+
+
+def abrir_mesa(mesa, desde):
+    """Abre la cuenta de la mesa (o la extiende para incluir un pedido más antiguo)."""
+    if not mesa.abierta_desde or desde < mesa.abierta_desde:
+        mesa.abierta_desde = desde
+        mesa.save(update_fields=["abierta_desde"])
+
+
+def cerrar_si_vacia(mesa):
+    """Si a la mesa ya no le quedan pedidos en su cuenta, queda libre."""
+    if not mesa or not mesa.abierta_desde:
+        return
+    quedan = Pedido.objects.filter(mesa=mesa, creado__gte=mesa.abierta_desde).exclude(estado=Pedido.Estado.CANCELADO)
+    if not quedan.exists():
+        mesa.abierta_desde = None
+        mesa.save(update_fields=["abierta_desde"])
+
+
+def avisar_pedido(pedido, accion, **extra):
+    emitir(pedido.restaurante, "pedidos", accion=accion, pedido=pedido.id, etiqueta=pedido.etiqueta,
+           mesero=pedido.creado_por_id, mesa=pedido.mesa.numero if pedido.mesa else None, **extra)
+
+
 class PedidoViewSet(DelRestaurante, mixins.ListModelMixin, mixins.RetrieveModelMixin,
                     mixins.CreateModelMixin, viewsets.GenericViewSet):
     serializer_class = PedidoSerializer
     permission_classes = [Roles(*TODOS)]
 
+    def get_serializer_class(self):
+        return PedidoDetalleSerializer if self.action == "retrieve" else PedidoSerializer
+
     def get_queryset(self):
         self.queryset = pedidos_qs()
         qs = super().get_queryset()
         q = self.request.query_params
+        if self.action == "retrieve":
+            return qs.prefetch_related(Prefetch("eventos", queryset=EventoPedido.objects.select_related("usuario")))
         if self.action != "list":
             return qs
         if q.get("activos") == "1":
             qs = qs.filter(estado__in=ACTIVOS)
         if q.get("estado"):
             qs = qs.filter(estado__in=q["estado"].split(","))
+        if q.get("mios") == "1":
+            qs = qs.filter(creado_por=self.request.user)
+        if q.get("sala") == "1":
+            # Lo que atiende sala: pedidos en mesa (los tome quien los tome) y los que tomó el mesero.
+            qs = qs.filter(Q(mesa__isnull=False) | Q(creado_por=self.request.user))
         if q.get("mesa"):
             qs = qs.filter(mesa_id=q["mesa"])
             mesa = Mesa.objects.filter(pk=q["mesa"]).first()
@@ -52,6 +130,19 @@ class PedidoViewSet(DelRestaurante, mixins.ListModelMixin, mixins.RetrieveModelM
         if q.get("hoy") == "1":
             qs = qs.filter(creado__date=timezone.localdate())
         return qs[: int(q.get("limite", 100))]
+
+    def responder(self, pedido, codigo=status.HTTP_200_OK):
+        pedido = pedidos_qs().prefetch_related(
+            Prefetch("eventos", queryset=EventoPedido.objects.select_related("usuario"))).get(pk=pedido.pk)
+        return Response(PedidoDetalleSerializer(pedido).data, status=codigo)
+
+    def pedido_editable(self, *estados):
+        pedido = self.get_object()
+        if self.request.user.rol == "cocina":
+            raise PermissionDenied("La cocina no modifica pedidos.")
+        if pedido.estado not in estados:
+            raise ValidationError(f"El pedido ya está {pedido.get_estado_display().lower()}.")
+        return pedido
 
     def create(self, request, *args, **kwargs):
         if request.user.rol == "cocina":
@@ -69,29 +160,20 @@ class PedidoViewSet(DelRestaurante, mixins.ListModelMixin, mixins.RetrieveModelM
                 cliente=d.get("cliente", ""), telefono=d.get("telefono", ""),
                 direccion=d.get("direccion", ""), nota=d.get("nota", ""), creado_por=request.user,
             )
-            # Bloqueamos las filas de los platos para no vender la misma última porción dos veces.
-            platos = {p.id: p for p in Plato.objects.select_for_update().select_related(
-                "restaurante", "alternativo").filter(id__in=d["platos"].keys())}
-            for i in d["items"]:
-                p = platos[i["plato"]]
-                if p.porciones_restantes is not None and i["cantidad"] > p.porciones_restantes:
-                    raise ValidationError({"items": [f"De {p.nombre} solo quedan {p.porciones_restantes}."]})
-                ItemPedido.objects.create(
-                    pedido=pedido, plato=p, cantidad=i["cantidad"], precio_unitario=p.precio,
-                    costo_unitario=p.costo, nota=i.get("nota", ""),
-                )
-                cambio = p.descontar(i["cantidad"])
-                emitir_plato(p, cambio)
-            if pedido.mesa and not pedido.mesa.abierta_desde:
-                pedido.mesa.abierta_desde = pedido.creado
-                pedido.mesa.save(update_fields=["abierta_desde"])
+            platos = anexar_items(pedido, d["items"], request.user, agregado=False)
+            if pedido.mesa:
+                abrir_mesa(pedido.mesa, pedido.creado)
+            desde = " desde WhatsApp" if msj else ""
+            pedido.registrar(Evento.CREADO, f"Pedido creado para {pedido.etiqueta}{desde}: {resumen(d['items'], platos)}",
+                             request.user)
+            if d.get("nota"):
+                pedido.registrar(Evento.NOTA, f"Nota para cocina: {d['nota']}", request.user)
             if msj:
                 msj.pedido = pedido
                 msj.save(update_fields=["pedido"])
                 emitir(r, "whatsapp")
-            emitir(r, "pedidos", accion="nuevo", pedido=pedido.id, etiqueta=pedido.etiqueta)
-        pedido = pedidos_qs().get(pk=pedido.pk)
-        return Response(PedidoSerializer(pedido).data, status=status.HTTP_201_CREATED)
+            avisar_pedido(pedido, "nuevo")
+        return self.responder(pedido, status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
     def avanzar(self, request, pk=None):
@@ -100,23 +182,87 @@ class PedidoViewSet(DelRestaurante, mixins.ListModelMixin, mixins.RetrieveModelM
         rol = request.user.rol
         if rol == "cocina" and pedido.estado == Pedido.Estado.LISTO:
             raise PermissionDenied("La entrega la marca sala o caja.")
-        if rol in ("mesero",) and pedido.estado != Pedido.Estado.LISTO:
+        if rol == "mesero" and pedido.estado != Pedido.Estado.LISTO:
             raise PermissionDenied("La cocina marca la preparación.")
-        if not pedido.avanzar():
-            raise ValidationError("Este pedido ya fue entregado.")
-        emitir(pedido.restaurante, "pedidos", accion=pedido.estado, pedido=pedido.id,
-               etiqueta=pedido.etiqueta, mesero=pedido.creado_por_id)
-        return Response(PedidoSerializer(pedidos_qs().get(pk=pedido.pk)).data)
+        with transaction.atomic():
+            if not pedido.avanzar():
+                raise ValidationError("Este pedido ya fue entregado.")
+            pedido.registrar(Evento.ESTADO, TEXTO_ESTADO[pedido.estado], request.user)
+            avisar_pedido(pedido, pedido.estado)
+        return self.responder(pedido)
 
-    @action(detail=True, methods=["post"], permission_classes=[Roles("admin", "caja")])
+    @action(detail=True, methods=["post"])
+    def agregar(self, request, pk=None):
+        """Anexa platos a un pedido que la cocina todavía no ha terminado."""
+        pedido = self.pedido_editable(Pedido.Estado.RECIBIDO, Pedido.Estado.EN_PREPARACION)
+        s = AgregarItemsSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        items = s.validated_data["items"]
+        validar_items(pedido.restaurante, items)
+        with transaction.atomic():
+            platos = anexar_items(pedido, items, request.user, agregado=True)
+            pedido.registrar(Evento.PLATOS, f"Se agregaron: {resumen(items, platos)}", request.user)
+            avisar_pedido(pedido, "actualizado")
+        return self.responder(pedido)
+
+    @action(detail=True, methods=["post"])
+    def quitar(self, request, pk=None):
+        """Quita un plato mientras la cocina no haya empezado; devuelve las porciones."""
+        pedido = self.pedido_editable(Pedido.Estado.RECIBIDO)
+        item = pedido.items.filter(pk=request.data.get("item")).select_related("plato").first()
+        if not item:
+            raise ValidationError("Ese plato no está en el pedido.")
+        if pedido.items.count() == 1:
+            raise ValidationError("Es el único plato del pedido: cancela el pedido completo.")
+        with transaction.atomic():
+            devolver_porciones(item.plato_id, item.cantidad)
+            texto = f"Se quitó: {item.cantidad} × {item.plato.nombre}"
+            item.delete()
+            pedido.registrar(Evento.QUITADO, texto, request.user)
+            avisar_pedido(pedido, "actualizado")
+        return self.responder(pedido)
+
+    @action(detail=True, methods=["post"])
+    def mover(self, request, pk=None):
+        """Pasa el pedido a otra mesa (el cliente se cambió o se anotó en la mesa equivocada)."""
+        pedido = self.pedido_editable(*ACTIVOS, Pedido.Estado.ENTREGADO)
+        if pedido.tipo not in CON_MESA:
+            raise ValidationError("Este pedido no es para comer en el local.")
+        destino = buscar_mesa(pedido.restaurante, request.data.get("mesa"))
+        anterior = pedido.mesa
+        if destino == anterior:
+            return self.responder(pedido)
+        with transaction.atomic():
+            pedido.mesa = destino
+            pedido.save(update_fields=["mesa"])
+            abrir_mesa(destino, pedido.creado)
+            cerrar_si_vacia(anterior)
+            origen = f"Mesa {anterior.numero}" if anterior else "sin mesa"
+            pedido.registrar(Evento.MESA, f"Pasó de {origen} a Mesa {destino.numero}", request.user)
+            avisar_pedido(pedido, "actualizado")
+        return self.responder(pedido)
+
+    @action(detail=True, methods=["post"])
     def cancelar(self, request, pk=None):
         pedido = self.get_object()
-        if pedido.estado == Pedido.Estado.ENTREGADO:
-            raise ValidationError("Un pedido entregado no se puede cancelar.")
-        pedido.estado = Pedido.Estado.CANCELADO
-        pedido.save(update_fields=["estado"])
-        emitir(pedido.restaurante, "pedidos", accion="cancelado", pedido=pedido.id)
-        return Response(PedidoSerializer(pedidos_qs().get(pk=pedido.pk)).data)
+        rol = request.user.rol
+        if rol == "cocina":
+            raise PermissionDenied("La cocina no cancela pedidos.")
+        if not pedido.activo:
+            raise ValidationError("Un pedido entregado o cancelado no se puede cancelar.")
+        # El mesero solo cancela lo suyo y antes de que la cocina empiece.
+        if rol == "mesero" and (pedido.creado_por_id != request.user.id or pedido.estado != Pedido.Estado.RECIBIDO):
+            raise PermissionDenied("Solo puedes cancelar tus pedidos antes de que la cocina empiece.")
+        motivo = (request.data.get("motivo") or "").strip()[:150]
+        with transaction.atomic():
+            for item in pedido.items.all():
+                devolver_porciones(item.plato_id, item.cantidad)
+            pedido.estado = Pedido.Estado.CANCELADO
+            pedido.save(update_fields=["estado"])
+            cerrar_si_vacia(pedido.mesa)
+            pedido.registrar(Evento.CANCELADO, f"Pedido cancelado{': ' + motivo if motivo else ''}", request.user)
+            avisar_pedido(pedido, "cancelado")
+        return self.responder(pedido)
 
 
 class MesaViewSet(DelRestaurante, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
@@ -219,7 +365,8 @@ class AvisosView(APIView):
             }
         listos = pedidos_qs().filter(restaurante=r, estado=Pedido.Estado.LISTO)
         if request.user.rol == "mesero":
-            listos = listos.filter(creado_por=request.user)
+            # Lo que está en una mesa lo sirve cualquier mesero; lo para llevar, quien lo tomó.
+            listos = listos.filter(Q(mesa__isnull=False) | Q(creado_por=request.user))
         hace = timezone.now() - timedelta(hours=12)
         return Response({
             "agotados": [fila(p) for p in platos if p.estado == Plato.Estado.AGOTADO],

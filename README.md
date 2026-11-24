@@ -110,7 +110,7 @@ También puedes usar varios dispositivos de verdad, por ejemplo el celular como 
 |---|---|---|
 | 2 · Disponibilidad | 1A tablero de cocina con filtros, 1D porciones del día con sugerencia según historial | ✅ Completo: estado con un toque, descuento automático de porciones, paso solo a "por agotarse" (umbral configurable), tiempo estimado de regreso, plato alternativo |
 | 3 · Carta del comensal | 1C carta QR | ✅ Sin instalar nada, en vivo, con calificación de platos |
-| 4 · Pedidos y sala | 1B tomar pedido, 2A mesas, 2B estado del pedido, 2E avisos, 2C pedidos en cocina, 2D caja | ✅ Bloquea lo agotado y lo que no alcanza, estados recibido → en preparación → listo → servido |
+| 4 · Pedidos y sala | 1B tomar pedido, 2A mesas, 2B cuenta de la mesa, detalle del pedido, 2E avisos, 2C pedidos en cocina, 2D caja | ✅ Bloquea lo agotado y lo que no alcanza. Estados recibido → en preparación → listo → servido. El mesero crea pedidos desde Mesas o Pedidos, elige o cambia la mesa, agrega platos (la cocina los ve como *Agregado*), quita platos antes de que la cocina empiece, pasa el pedido a otra mesa y cancela los suyos. Cada pedido guarda un **registro de actualizaciones**: quién hizo qué y cuándo. La venta de mostrador en caja siempre queda ligada a una mesa. |
 | 1 · Gestión de la carta | 3B carta, 3C crear o editar plato | ✅ CRUD con foto, qué incluye y qué se cobra aparte, horarios, costo y margen, menú del día, promocionar, QR descargable |
 | 6 · Estadísticas | 3A panel | ✅ Ventas por hora y día, más y menos vendidos, agotamientos, margen por plato, exportar a Excel (CSV) |
 | 5 · Inventario | 3D inventario | ✅ Básico: existencias, mínimo, vencimientos, movimientos, cierre del día; un insumo en 0 agota sus platos |

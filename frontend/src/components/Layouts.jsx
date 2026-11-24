@@ -21,11 +21,18 @@ function AvisosEnVivo({ para }) {
     if (para === 'sala' && e.tema === 'platos' && e.cambio && e.plato?.estado === 'agotado') {
       avisar(`Se agotó ${e.plato.nombre}`, 'error', e.alternativo ? `Ofrece ${e.alternativo}.` : 'Deja de ofrecerlo.')
     }
-    if (para === 'sala' && e.tema === 'pedidos' && e.accion === 'listo' && (!e.mesero || e.mesero === usuario?.id)) {
+    // Lo que va a una mesa lo puede servir cualquier mesero; lo para llevar, quien lo tomó.
+    if (para === 'sala' && e.tema === 'pedidos' && e.accion === 'listo' && (e.mesa || e.mesero === usuario?.id)) {
       avisar(`${e.etiqueta} está listo`, 'info', 'Recoger en cocina.')
     }
     if (para === 'cocina' && e.tema === 'pedidos' && e.accion === 'nuevo') {
       avisar(`Nuevo pedido · ${e.etiqueta}`, 'info')
+    }
+    if (para === 'cocina' && e.tema === 'pedidos' && e.accion === 'actualizado') {
+      avisar(`${e.etiqueta} actualizó su pedido #${e.pedido}`, 'info', 'Revisa los platos agregados o quitados.')
+    }
+    if (para === 'cocina' && e.tema === 'pedidos' && e.accion === 'cancelado') {
+      avisar(`Se canceló el pedido #${e.pedido}`, 'error', e.etiqueta)
     }
     if (para === 'caja' && e.tema === 'whatsapp' && e.accion === 'nuevo') {
       avisar('Llegó un pedido por WhatsApp', 'info', 'Revísalo en la bandeja.')

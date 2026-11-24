@@ -73,11 +73,21 @@ class Pedido(models.Model):
     def etiqueta(self):
         if self.tipo == self.Tipo.MESA and self.mesa:
             return f"Mesa {self.mesa.numero}"
+        if self.tipo == self.Tipo.MOSTRADOR and self.mesa:
+            return f"Mesa {self.mesa.numero} · mostrador"
         if self.tipo == self.Tipo.DOMICILIO:
             return f"Domicilio · {self.direccion}" if self.direccion else "Domicilio"
         if self.tipo == self.Tipo.LLEVAR:
             return f"Para llevar · {self.cliente}" if self.cliente else "Para llevar"
         return f"Mostrador · {self.cliente}" if self.cliente else "Mostrador"
+
+    @property
+    def activo(self):
+        return self.estado in (self.Estado.RECIBIDO, self.Estado.EN_PREPARACION, self.Estado.LISTO)
+
+    def registrar(self, tipo, texto, usuario=None):
+        """Deja constancia de una actualización del pedido en su historial."""
+        return EventoPedido.objects.create(pedido=self, tipo=tipo, texto=texto, usuario=usuario)
 
     def avanzar(self):
         siguiente = self.SIGUIENTE.get(self.estado)
@@ -101,10 +111,34 @@ class ItemPedido(models.Model):
     precio_unitario = models.PositiveIntegerField()
     costo_unitario = models.PositiveIntegerField(default=0)
     nota = models.CharField(max_length=200, blank=True)
+    # Platos que se anexaron después de enviar el pedido: la cocina los ve marcados como nuevos.
+    agregado = models.BooleanField(default=False)
 
     @property
     def subtotal(self):
         return self.cantidad * self.precio_unitario
+
+
+class EventoPedido(models.Model):
+    """Registro de actualizaciones de un pedido: quién hizo qué y cuándo."""
+
+    class Tipo(models.TextChoices):
+        CREADO = "creado", "Creado"
+        PLATOS = "platos", "Platos agregados"
+        QUITADO = "quitado", "Plato quitado"
+        MESA = "mesa", "Cambio de mesa"
+        ESTADO = "estado", "Cambio de estado"
+        NOTA = "nota", "Nota"
+        CANCELADO = "cancelado", "Cancelado"
+
+    pedido = models.ForeignKey(Pedido, on_delete=models.CASCADE, related_name="eventos")
+    tipo = models.CharField(max_length=10, choices=Tipo.choices)
+    texto = models.CharField(max_length=300)
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    creado = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["creado", "id"]
 
 
 class MensajeWhatsApp(models.Model):

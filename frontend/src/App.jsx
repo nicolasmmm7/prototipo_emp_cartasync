@@ -14,6 +14,7 @@ import Mesas from './pages/mesero/Mesas'
 import TomarPedido from './pages/mesero/TomarPedido'
 import PedidoMesa from './pages/mesero/PedidoMesa'
 import MisPedidos from './pages/mesero/MisPedidos'
+import DetallePedido from './pages/mesero/DetallePedido'
 import Avisos from './pages/mesero/Avisos'
 import Caja from './pages/caja/Caja'
 import Estadisticas from './pages/admin/Estadisticas'
@@ -71,9 +72,11 @@ export default function App() {
           <Route path="pedidos" element={<MisPedidos />} />
           <Route path="avisos" element={<Avisos />} />
           <Route path="mesa/:mesaId" element={<PedidoMesa />} />
+          <Route path="pedido/:id" element={<DetallePedido />} />
         </Route>
         {/* Tomar pedido ocupa toda la pantalla, sin la barra inferior. */}
         <Route path="/mesero/nuevo/:tipo/:mesaId?" element={<TomarPedido />} />
+        <Route path="/mesero/pedido/:pedidoId/agregar" element={<TomarPedido />} />
       </Route>
 
       <Route element={<Protegida roles={['caja']} />}>

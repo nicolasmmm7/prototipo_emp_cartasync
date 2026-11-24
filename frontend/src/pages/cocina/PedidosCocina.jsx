@@ -75,6 +75,9 @@ export default function PedidosCocina() {
                     {p.items.map((i) => (
                       <li key={i.id} className="text-cuerpo">
                         <span className="font-semibold">{i.cantidad} ×</span> {i.plato_nombre}
+                        {i.agregado && (
+                          <span className="ml-2 rounded-full bg-acento px-2 py-0.5 text-etiqueta font-semibold text-white">Agregado</span>
+                        )}
                         {i.nota && <span className="block text-pequeno text-texto-2">↳ {i.nota}</span>}
                       </li>
                     ))}

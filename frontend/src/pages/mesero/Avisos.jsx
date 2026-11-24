@@ -28,7 +28,7 @@ export default function Avisos() {
             <button
               key={p.id}
               type="button"
-              onClick={() => p.mesa && nav(`/mesero/mesa/${p.mesa}`)}
+              onClick={() => nav(`/mesero/pedido/${p.id}`)}
               className="tarjeta block w-full border-2 border-disponible p-4 text-left"
             >
               <p className="font-semibold">{p.etiqueta} · recoger en cocina</p>
