@@ -29,6 +29,7 @@ api = [
     path("auth/refresh/", TokenRefreshView.as_view()),
     path("auth/yo/", cuentas.YoView.as_view()),
     path("auth/registro/", cuentas.RegistroView.as_view()),
+    path("demo/reiniciar/", cuentas.ReiniciarDemoView.as_view()),
     path("restaurante/", cuentas.RestauranteView.as_view()),
     path("avisos/", pedidos.AvisosView.as_view()),
     path("estadisticas/", reportes.EstadisticasView.as_view()),

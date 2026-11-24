@@ -3,14 +3,15 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   BarChart3, Bell, BookOpen, ChefHat, ClipboardList, CreditCard, LayoutGrid, LogOut, Menu,
-  Package, Smartphone, Store, Users, X,
+  Package, Repeat, Smartphone, Store, Users, X,
 } from 'lucide-react'
 import { obtener } from '../lib/api'
 import { fechaLarga, servicioActual } from '../lib/formato'
 import { useSesion } from '../lib/sesion'
 import { useAvisar } from '../lib/avisos'
 import { useEventos, useTiempoReal } from '../lib/tiempoReal'
-import { Boton, Indicador, Logo } from './ui'
+import { BotonCambiarRol, useCambiarRol } from './CambiarRol'
+import { Indicador, Logo } from './ui'
 
 /** Avisos emergentes con lo que pasa en vivo, según quién está mirando. */
 function AvisosEnVivo({ para }) {
@@ -46,7 +47,6 @@ function useSalir() {
 export function LayoutEquipo({ etiqueta, pestanas = [] }) {
   const { conectado } = useTiempoReal()
   const { usuario } = useSesion()
-  const salir = useSalir()
   return (
     <div className="min-h-screen">
       <AvisosEnVivo para={etiqueta === 'Cocina' ? 'cocina' : 'caja'} />
@@ -79,9 +79,8 @@ export function LayoutEquipo({ etiqueta, pestanas = [] }) {
                 Panel del dueño
               </NavLink>
             )}
-            <Boton variante="secundario" tamano="sm" onClick={salir}>
-              Salir
-            </Boton>
+            <span className="hidden text-pequeno text-texto-2 lg:inline">{usuario?.nombre}</span>
+            <BotonCambiarRol />
           </div>
         </div>
       </header>
@@ -112,6 +111,7 @@ export function LayoutDueno() {
   const { conectado } = useTiempoReal()
   const salir = useSalir()
   const [abierto, setAbierto] = useState(false)
+  const cambiarRol = useCambiarRol()
 
   const enlace = ({ isActive }) =>
     `flex items-center gap-3 rounded-lg px-3 py-2.5 text-pequeno font-medium ${
@@ -139,6 +139,9 @@ export function LayoutDueno() {
           <p className="text-pequeno font-semibold">{usuario?.nombre}</p>
           <Indicador conectado={conectado} />
         </div>
+        <button type="button" onClick={cambiarRol.abrir} className={enlace({ isActive: false }) + ' w-full'}>
+          <Repeat size={18} /> Cambiar de rol
+        </button>
         <button type="button" onClick={salir} className={enlace({ isActive: false }) + ' w-full'}>
           <LogOut size={18} /> Salir
         </button>
@@ -168,6 +171,7 @@ export function LayoutDueno() {
       <main className="min-w-0 flex-1 px-4 py-6 lg:px-8">
         <Outlet />
       </main>
+      {cambiarRol.ventana}
     </div>
   )
 }
@@ -176,6 +180,7 @@ export function LayoutDueno() {
 export function LayoutMesero() {
   const { data: avisos } = useQuery({ queryKey: ['avisos'], queryFn: () => obtener('/avisos/') })
   const pendientes = (avisos?.agotados?.length || 0) + (avisos?.listos?.length || 0)
+  const cambiarRol = useCambiarRol()
   const item = ({ isActive }) =>
     `flex flex-1 flex-col items-center gap-0.5 py-2 text-etiqueta font-medium ${isActive ? 'text-marca' : 'text-texto-2'}`
   return (
@@ -200,7 +205,11 @@ export function LayoutMesero() {
           </span>
           Avisos{pendientes > 0 ? ` (${pendientes})` : ''}
         </NavLink>
+        <button type="button" onClick={cambiarRol.abrir} className={item({ isActive: false })}>
+          <Repeat size={22} /> Cambiar rol
+        </button>
       </nav>
+      {cambiarRol.ventana}
     </div>
   )
 }

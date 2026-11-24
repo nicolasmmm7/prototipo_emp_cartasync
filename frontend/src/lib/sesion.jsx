@@ -9,12 +9,17 @@ export function SesionProvider({ children }) {
   const [sesion, setSesion] = useState(leerSesion)
   const qc = useQueryClient()
 
-  const ingresar = useCallback(async (username, password) => {
-    const { data } = await axios.post('/api/auth/login/', { username, password })
-    guardarSesion(data)
-    setSesion(data)
-    return data.usuario
-  }, [])
+  // Entrar con otro usuario reemplaza la sesión de esta pestaña y limpia los datos del anterior.
+  const ingresar = useCallback(
+    async (username, password) => {
+      const { data } = await axios.post('/api/auth/login/', { username, password })
+      qc.clear()
+      guardarSesion(data)
+      setSesion(data)
+      return data.usuario
+    },
+    [qc],
+  )
 
   const salir = useCallback(() => {
     guardarSesion(null)

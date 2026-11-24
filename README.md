@@ -84,12 +84,25 @@ La carta del comensal es pública: **http://localhost:5173/carta/la-esquina** (e
 
 `python manage.py sembrar` borra y vuelve a crear los datos de *Restaurante La Esquina*: 13 platos, 8 mesas, inventario y unas 5 semanas de ventas para que las estadísticas tengan contenido.
 
-## Para ver el tiempo real
+## Para mostrar el tiempo real
 
-1. Abre la cocina (`rosa`) en una ventana y el mesero (`andres`) en otra, o en el celular con la vista móvil.
-2. En el mesero, toca una mesa libre para tomar un pedido.
-3. En la cocina, marca un plato como **Agotado**. Al mesero le aparece *"Se agotó… ofrece…"* y el plato queda bloqueado. La carta QR también se actualiza.
-4. Envía el pedido. A la cocina le llega *"Nuevo pedido"*. Cuando lo marca **listo**, la mesa se ilumina en el celular del mesero.
+**Cada pestaña del navegador tiene su propia sesión.** Puedes tener cocina, mesero y caja abiertos a la vez sin que se pisen. Desde cualquier vista, el botón **Cambiar de rol** te pasa a otro usuario en esa pestaña sin volver a escribir la contraseña.
+
+### Modo demostración (recomendado para presentar)
+
+Abre **http://localhost:5173/demo**. En una sola pantalla verás cuatro paneles, cada uno con su propia sesión: **Cocina** y **Caja** a la izquierda, el **celular del mesero** y la **carta QR del comensal** a la derecha.
+
+- En cada panel puedes elegir otra vista (dueño, la mesera Camila…), recargarlo o abrirlo en una pestaña aparte.
+- **Reiniciar datos** vuelve a cargar los datos de ejemplo para empezar la presentación desde cero. Solo funciona con `DJANGO_DEBUG=1`, que es lo predeterminado.
+
+Recorrido sugerido:
+
+1. En **Cocina**, marca un plato como **Agotado**. Al mesero le aparece *"Se agotó… ofrece…"*, y la caja y la carta QR lo tachan al instante.
+2. En el **mesero**, toca una mesa libre y envía un pedido. A la cocina le llega *"Nuevo pedido"*.
+3. En **Cocina → Pedidos**, márcalo listo. La mesa se ilumina en el celular del mesero.
+4. En **Caja**, toca *Simular mensaje entrante* para recibir un pedido de WhatsApp.
+
+También puedes usar varios dispositivos de verdad, por ejemplo el celular como mesero. Abre `http://<IP-de-tu-computador>:5173` en la misma red wifi; Vite ya acepta conexiones externas.
 
 ## Qué incluye
 

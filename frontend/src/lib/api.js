@@ -1,21 +1,29 @@
 import axios from 'axios'
 
-const CLAVE = 'cartasync.sesion'
+/*
+ * Una sesión por pestaña: se guarda en sessionStorage, así se pueden tener abiertos
+ * cocina, mesero y caja a la vez en el mismo navegador sin que se pisen.
+ * Los paneles de /demo son iframes que comparten el sessionStorage de la pestaña,
+ * por eso cada uno usa su propia clave según el nombre de su ventana (window.name).
+ */
+const CLAVE = `cartasync.sesion${window.name ? `.${window.name}` : ''}`
+let enMemoria = null // respaldo si el navegador bloquea el almacenamiento
 
 export function leerSesion() {
   try {
-    return JSON.parse(localStorage.getItem(CLAVE)) || null
+    return JSON.parse(sessionStorage.getItem(CLAVE)) || null
   } catch {
-    return null
+    return enMemoria
   }
 }
 
 export function guardarSesion(sesion) {
+  enMemoria = sesion
   try {
-    if (sesion) localStorage.setItem(CLAVE, JSON.stringify(sesion))
-    else localStorage.removeItem(CLAVE)
+    if (sesion) sessionStorage.setItem(CLAVE, JSON.stringify(sesion))
+    else sessionStorage.removeItem(CLAVE)
   } catch {
-    /* almacenamiento bloqueado: la sesión dura lo que dure la pestaña */
+    /* almacenamiento bloqueado: queda solo en memoria */
   }
 }
 
