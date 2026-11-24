@@ -178,7 +178,8 @@ class Command(BaseCommand):
             for nombre in set(elegidos):
                 p = platos[nombre]
                 items.append(ItemPedido(pedido=pedido, plato=p, cantidad=elegidos.count(nombre),
-                                        precio_unitario=p.precio, costo_unitario=p.costo))
+                                        precio_unitario=p.precio, costo_unitario=p.costo,
+                                        estado="listo", listo_en=pedido.listo_desde))
         ItemPedido.objects.bulk_create(items, batch_size=1000)
         CambioEstado.objects.bulk_create(cambios)
 
@@ -227,7 +228,9 @@ class Command(BaseCommand):
             for nombre, cant, nota in platos_:
                 p = platos[nombre]
                 ItemPedido.objects.create(pedido=ped, plato=p, cantidad=cant, precio_unitario=p.precio,
-                                          costo_unitario=p.costo, nota=nota)
+                                          costo_unitario=p.costo, nota=nota,
+                                          estado="listo" if estado in ("listo", "entregado") else "pendiente",
+                                          listo_en=ped.listo_desde)
             # Historial del pedido, como si se hubiera ido actualizando durante el servicio.
             detalle = ", ".join(f"{c} × {n}" for n, c, _ in platos_)
             eventos = [(creado, "creado", f"Pedido creado para {ped.etiqueta}: {detalle}", ped.creado_por)]
@@ -247,8 +250,25 @@ class Command(BaseCommand):
             return ped
 
         m = {x.numero: x for x in mesas}
-        pedido_hoy(m[1], estado="en_preparacion", hace=12, platos_=[
+        p1 = pedido_hoy(m[1], estado="en_preparacion", hace=12, platos_=[
             ("Bandeja paisa", 2, "Una sin chicharrón"), ("Pechuga a la plancha", 1, ""), ("Limonada natural", 3, "")])
+        # Avance detallado de la cocina en la mesa 1: un plato listo, tiempo estimado y un problema
+        # (se acabó el limón) que el mesero debe resolver cambiando o quitando la limonada.
+        def evento(ped, minutos, tipo, texto, usuario):
+            EventoPedido.objects.create(pedido=ped, tipo=tipo, texto=texto, usuario=usuario,
+                                        creado=ahora - timedelta(minutes=minutos))
+        p1.listo_estimado = ahora + timedelta(minutes=6)
+        p1.save(update_fields=["listo_estimado"])
+        evento(p1, 10, "estimado", f"Sale en unos 16 min (aprox. {timezone.localtime(p1.listo_estimado).strftime('%H:%M')})", rosa)
+        pechuga = p1.items.get(plato=platos["Pechuga a la plancha"])
+        pechuga.estado, pechuga.listo_en = "listo", ahora - timedelta(minutes=4)
+        pechuga.save(update_fields=["estado", "listo_en"])
+        evento(p1, 4, "item", "Plato listo: 1 × Pechuga a la plancha (1 de 3)", rosa)
+        limonada = p1.items.get(plato=platos["Limonada natural"])
+        limonada.estado, limonada.problema = "problema", "Se acabó el limón"
+        limonada.save(update_fields=["estado", "problema"])
+        evento(p1, 3, "problema", "No se puede preparar 3 × Limonada natural: Se acabó el limón", rosa)
+        evento(p1, 2, "mensaje", "Mensaje de cocina: Las bandejas salen en 5 minutos", rosa)
         pedido_hoy(m[2], estado="listo", hace=18, platos_=[("Almuerzo corriente del día", 2, "")], por=usuarios["camila"])
         pedido_hoy(m[4], estado="entregado", hace=35, platos_=[
             ("Carne guisada", 2, ""), ("Caldo de costilla", 2, "")], por=usuarios["camila"])

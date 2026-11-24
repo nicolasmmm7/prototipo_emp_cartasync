@@ -33,7 +33,7 @@ TEXTO_ESTADO = {
 
 def pedidos_qs():
     return Pedido.objects.select_related("mesa", "creado_por").prefetch_related(
-        Prefetch("items", queryset=ItemPedido.objects.select_related("plato"))
+        Prefetch("items", queryset=ItemPedido.objects.select_related("plato", "plato__alternativo"))
     )
 
 
@@ -92,6 +92,23 @@ def cerrar_si_vacia(mesa):
         mesa.save(update_fields=["abierta_desde"])
 
 
+def revisar_completo(pedido, usuario):
+    """Cuando la cocina termina el último plato, el pedido pasa solo a "listo"."""
+    items = list(ItemPedido.objects.filter(pedido=pedido))
+    if pedido.estado != Pedido.Estado.EN_PREPARACION or not items:
+        return False
+    if any(i.estado != ItemPedido.Estado.LISTO for i in items):
+        return False
+    pedido.avanzar()
+    pedido.registrar(Evento.ESTADO, "Listo para servir: todos los platos están listos", usuario)
+    avisar_pedido(pedido, "listo")
+    return True
+
+
+def hhmm(fecha):
+    return timezone.localtime(fecha).strftime("%H:%M")
+
+
 def avisar_pedido(pedido, accion, **extra):
     emitir(pedido.restaurante, "pedidos", accion=accion, pedido=pedido.id, etiqueta=pedido.etiqueta,
            mesero=pedido.creado_por_id, mesa=pedido.mesa.numero if pedido.mesa else None, **extra)
@@ -144,6 +161,20 @@ class PedidoViewSet(DelRestaurante, mixins.ListModelMixin, mixins.RetrieveModelM
             raise ValidationError(f"El pedido ya está {pedido.get_estado_display().lower()}.")
         return pedido
 
+    def pedido_cocina(self, *estados):
+        pedido = self.get_object()
+        if self.request.user.rol not in ("cocina", "admin"):
+            raise PermissionDenied("Solo la cocina registra el avance de la preparación.")
+        if pedido.estado not in estados:
+            raise ValidationError(f"El pedido ya está {pedido.get_estado_display().lower()}.")
+        return pedido
+
+    def item_de(self, pedido):
+        item = pedido.items.filter(pk=self.request.data.get("item")).select_related("plato", "plato__alternativo").first()
+        if not item:
+            raise ValidationError("Ese plato no está en el pedido.")
+        return item
+
     def create(self, request, *args, **kwargs):
         if request.user.rol == "cocina":
             raise PermissionDenied("La cocina no toma pedidos.")
@@ -184,11 +215,130 @@ class PedidoViewSet(DelRestaurante, mixins.ListModelMixin, mixins.RetrieveModelM
             raise PermissionDenied("La entrega la marca sala o caja.")
         if rol == "mesero" and pedido.estado != Pedido.Estado.LISTO:
             raise PermissionDenied("La cocina marca la preparación.")
+        if pedido.estado == Pedido.Estado.EN_PREPARACION and pedido.items.filter(estado=ItemPedido.Estado.PROBLEMA).exists():
+            raise ValidationError("Hay un plato que no se puede preparar: espera a que sala lo cambie o lo quite.")
         with transaction.atomic():
             if not pedido.avanzar():
                 raise ValidationError("Este pedido ya fue entregado.")
+            if pedido.estado == Pedido.Estado.LISTO:
+                pedido.items.filter(estado=ItemPedido.Estado.PENDIENTE).update(
+                    estado=ItemPedido.Estado.LISTO, listo_en=timezone.now())
             pedido.registrar(Evento.ESTADO, TEXTO_ESTADO[pedido.estado], request.user)
             avisar_pedido(pedido, pedido.estado)
+        return self.responder(pedido)
+
+    # --- Avance detallado de la cocina ---
+
+    @action(detail=True, methods=["post"])
+    def plato_listo(self, request, pk=None):
+        """Marca (o desmarca) un plato como listo. Con el último, el pedido queda listo."""
+        pedido = self.pedido_cocina(Pedido.Estado.RECIBIDO, Pedido.Estado.EN_PREPARACION)
+        item = self.item_de(pedido)
+        listo = request.data.get("listo", True) is not False
+        if item.estado == ItemPedido.Estado.PROBLEMA:
+            raise ValidationError("Este plato tiene un problema: sala debe cambiarlo o quitarlo.")
+        with transaction.atomic():
+            if pedido.estado == Pedido.Estado.RECIBIDO:
+                pedido.avanzar()
+                pedido.registrar(Evento.ESTADO, TEXTO_ESTADO[pedido.estado], request.user)
+            item.estado = ItemPedido.Estado.LISTO if listo else ItemPedido.Estado.PENDIENTE
+            item.listo_en = timezone.now() if listo else None
+            item.save(update_fields=["estado", "listo_en"])
+            items = list(ItemPedido.objects.filter(pedido=pedido))
+            hechos = sum(1 for i in items if i.estado == ItemPedido.Estado.LISTO)
+            texto = (f"Plato listo: {item.cantidad} × {item.plato.nombre} ({hechos} de {len(items)})" if listo
+                     else f"{item.plato.nombre} volvió a preparación")
+            pedido.registrar(Evento.ITEM, texto, request.user)
+            if not revisar_completo(pedido, request.user):
+                avisar_pedido(pedido, "avance", texto=texto)
+        return self.responder(pedido)
+
+    @action(detail=True, methods=["post"])
+    def problema(self, request, pk=None):
+        """La cocina avisa que un plato no se puede preparar; sala decide si lo cambia o lo quita."""
+        pedido = self.pedido_cocina(Pedido.Estado.RECIBIDO, Pedido.Estado.EN_PREPARACION)
+        item = self.item_de(pedido)
+        motivo = (request.data.get("motivo") or "No se puede preparar").strip()[:150]
+        with transaction.atomic():
+            item.estado = ItemPedido.Estado.PROBLEMA
+            item.problema = motivo
+            item.listo_en = None
+            item.save(update_fields=["estado", "problema", "listo_en"])
+            extra = ""
+            plato = item.plato
+            if request.data.get("agotar") and plato.estado != Plato.Estado.AGOTADO:
+                cambio = plato.cambiar_estado(Plato.Estado.AGOTADO, CambioEstado.Origen.COCINA, request.user)
+                emitir_plato(plato, cambio)
+                extra = ". Se marcó agotado en la carta"
+            texto = f"No se puede preparar {item.cantidad} × {plato.nombre}: {motivo}{extra}"
+            pedido.registrar(Evento.PROBLEMA, texto, request.user)
+            alt = plato.alternativo.nombre if plato.alternativo and plato.alternativo.estado != Plato.Estado.AGOTADO else None
+            avisar_pedido(pedido, "problema", texto=texto, plato=plato.nombre, alternativo=alt)
+        return self.responder(pedido)
+
+    @action(detail=True, methods=["post"])
+    def estimado(self, request, pk=None):
+        """La cocina dice cuánto falta para que el pedido esté listo."""
+        pedido = self.pedido_cocina(Pedido.Estado.RECIBIDO, Pedido.Estado.EN_PREPARACION)
+        try:
+            minutos = int(request.data.get("minutos"))
+        except (TypeError, ValueError):
+            raise ValidationError("Indica los minutos.")
+        if not 1 <= minutos <= 120:
+            raise ValidationError("El tiempo debe estar entre 1 y 120 minutos.")
+        with transaction.atomic():
+            if pedido.estado == Pedido.Estado.RECIBIDO:
+                pedido.avanzar()
+                pedido.registrar(Evento.ESTADO, TEXTO_ESTADO[pedido.estado], request.user)
+            pedido.listo_estimado = timezone.now() + timedelta(minutes=minutos)
+            pedido.save(update_fields=["listo_estimado"])
+            texto = f"Sale en unos {minutos} min (aprox. {hhmm(pedido.listo_estimado)})"
+            pedido.registrar(Evento.ESTIMADO, texto, request.user)
+            avisar_pedido(pedido, "avance", texto=texto)
+        return self.responder(pedido)
+
+    @action(detail=True, methods=["post"])
+    def regresar(self, request, pk=None):
+        """Deshace un "listo" marcado por error: el pedido vuelve a preparación."""
+        pedido = self.pedido_cocina(Pedido.Estado.LISTO)
+        with transaction.atomic():
+            pedido.estado = Pedido.Estado.EN_PREPARACION
+            pedido.listo_desde = None
+            pedido.save(update_fields=["estado", "listo_desde"])
+            pedido.registrar(Evento.ESTADO, "Volvió a preparación (se había marcado listo por error)", request.user)
+            avisar_pedido(pedido, "avance", texto="Volvió a preparación")
+        return self.responder(pedido)
+
+    @action(detail=True, methods=["post"])
+    def mensaje(self, request, pk=None):
+        """Mensaje corto entre cocina y sala sobre este pedido."""
+        pedido = self.get_object()
+        texto = (request.data.get("texto") or "").strip()[:150]
+        if not texto:
+            raise ValidationError("Escribe el mensaje.")
+        if not pedido.activo:
+            raise ValidationError("El pedido ya no está en curso.")
+        de = "cocina" if request.user.rol == "cocina" else "sala"
+        pedido.registrar(Evento.MENSAJE, f"Mensaje de {de}: {texto}", request.user)
+        avisar_pedido(pedido, "mensaje", de=de, texto=texto)
+        return self.responder(pedido)
+
+    @action(detail=True, methods=["post"])
+    def reemplazar(self, request, pk=None):
+        """Cambia un plato (por ejemplo, el que la cocina no puede preparar) por otro."""
+        pedido = self.pedido_editable(Pedido.Estado.RECIBIDO, Pedido.Estado.EN_PREPARACION)
+        item = self.item_de(pedido)
+        if pedido.estado != Pedido.Estado.RECIBIDO and item.estado != ItemPedido.Estado.PROBLEMA:
+            raise ValidationError("La cocina ya empezó: solo se puede cambiar un plato que no se pueda preparar.")
+        nuevo = [{"plato": int(request.data.get("plato") or 0), "cantidad": item.cantidad}]
+        validar_items(pedido.restaurante, nuevo)
+        with transaction.atomic():
+            devolver_porciones(item.plato_id, item.cantidad)
+            antes = f"{item.cantidad} × {item.plato.nombre}"
+            item.delete()
+            platos = anexar_items(pedido, nuevo, request.user, agregado=True)
+            pedido.registrar(Evento.CAMBIO, f"Se cambió {antes} por {resumen(nuevo, platos)}", request.user)
+            avisar_pedido(pedido, "actualizado")
         return self.responder(pedido)
 
     @action(detail=True, methods=["post"])
@@ -208,10 +358,10 @@ class PedidoViewSet(DelRestaurante, mixins.ListModelMixin, mixins.RetrieveModelM
     @action(detail=True, methods=["post"])
     def quitar(self, request, pk=None):
         """Quita un plato mientras la cocina no haya empezado; devuelve las porciones."""
-        pedido = self.pedido_editable(Pedido.Estado.RECIBIDO)
-        item = pedido.items.filter(pk=request.data.get("item")).select_related("plato").first()
-        if not item:
-            raise ValidationError("Ese plato no está en el pedido.")
+        pedido = self.pedido_editable(Pedido.Estado.RECIBIDO, Pedido.Estado.EN_PREPARACION)
+        item = self.item_de(pedido)
+        if pedido.estado != Pedido.Estado.RECIBIDO and item.estado != ItemPedido.Estado.PROBLEMA:
+            raise ValidationError("La cocina ya empezó: solo se puede quitar un plato que no se pueda preparar.")
         if pedido.items.count() == 1:
             raise ValidationError("Es el único plato del pedido: cancela el pedido completo.")
         with transaction.atomic():
@@ -220,6 +370,8 @@ class PedidoViewSet(DelRestaurante, mixins.ListModelMixin, mixins.RetrieveModelM
             item.delete()
             pedido.registrar(Evento.QUITADO, texto, request.user)
             avisar_pedido(pedido, "actualizado")
+            # Si lo que quedaba pendiente era justo ese plato, el pedido queda listo (cambio automático).
+            revisar_completo(pedido, None)
         return self.responder(pedido)
 
     @action(detail=True, methods=["post"])

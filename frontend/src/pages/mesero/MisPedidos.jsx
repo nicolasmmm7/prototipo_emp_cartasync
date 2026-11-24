@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronRight, ClipboardList, Plus, ShoppingBag } from 'lucide-react'
 import { EncabezadoMovil } from '../../components/Layouts'
-import { EstadoPedido, SelectorMesa } from '../../components/Pedido'
+import { AvancePedido, EstadoPedido, SelectorMesa } from '../../components/Pedido'
 import { Boton, Cargando, Chip, ErrorCarga, Vacio, useAhora } from '../../components/ui'
 import { obtener } from '../../lib/api'
 import { dinero, hace } from '../../lib/formato'
@@ -79,6 +79,7 @@ export default function MisPedidos() {
                     <p className="mt-1.5 truncate text-pequeno">
                       {p.items.map((i) => `${i.cantidad} × ${i.plato_nombre}`).join(' · ')}
                     </p>
+                    <AvancePedido p={p} />
                   </div>
                   <ChevronRight size={18} className="shrink-0 text-tenue" />
                 </button>

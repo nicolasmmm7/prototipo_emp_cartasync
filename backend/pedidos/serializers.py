@@ -11,10 +11,22 @@ CON_MESA = (Pedido.Tipo.MESA, Pedido.Tipo.MOSTRADOR)
 class ItemPedidoSerializer(serializers.ModelSerializer):
     plato_nombre = serializers.CharField(source="plato.nombre", read_only=True)
     subtotal = serializers.IntegerField(read_only=True)
+    estado_nombre = serializers.CharField(source="get_estado_display", read_only=True)
+    # Para resolver un plato con problema: el alternativo que definió el dueño, si está disponible.
+    alternativo = serializers.SerializerMethodField()
 
     class Meta:
         model = ItemPedido
-        fields = ["id", "plato", "plato_nombre", "cantidad", "precio_unitario", "subtotal", "nota", "agregado"]
+        fields = [
+            "id", "plato", "plato_nombre", "cantidad", "precio_unitario", "subtotal", "nota", "agregado",
+            "estado", "estado_nombre", "problema", "listo_en", "alternativo",
+        ]
+
+    def get_alternativo(self, item):
+        alt = item.plato.alternativo
+        if not alt or not alt.activo or alt.estado == Plato.Estado.AGOTADO:
+            return None
+        return {"id": alt.id, "nombre": alt.nombre, "precio": alt.precio}
 
 
 class EventoPedidoSerializer(serializers.ModelSerializer):
@@ -34,15 +46,24 @@ class PedidoSerializer(serializers.ModelSerializer):
     estado_nombre = serializers.CharField(source="get_estado_display", read_only=True)
     mesa_numero = serializers.IntegerField(source="mesa.numero", read_only=True, default=None)
     creado_por_nombre = serializers.CharField(source="creado_por.nombre_visible", read_only=True, default=None)
+    avance = serializers.SerializerMethodField()
 
     class Meta:
         model = Pedido
         fields = [
             "id", "tipo", "tipo_nombre", "origen", "etiqueta", "mesa", "mesa_numero", "cliente",
             "telefono", "direccion", "nota", "estado", "estado_nombre", "creado",
-            "en_preparacion_desde", "listo_desde", "entregado_desde", "total", "items",
-            "creado_por", "creado_por_nombre",
+            "en_preparacion_desde", "listo_desde", "entregado_desde", "listo_estimado", "total", "items",
+            "creado_por", "creado_por_nombre", "avance",
         ]
+
+    def get_avance(self, pedido):
+        items = pedido.items.all()
+        return {
+            "listos": sum(1 for i in items if i.estado == ItemPedido.Estado.LISTO),
+            "problemas": sum(1 for i in items if i.estado == ItemPedido.Estado.PROBLEMA),
+            "total": len(items),
+        }
 
 
 class PedidoDetalleSerializer(PedidoSerializer):

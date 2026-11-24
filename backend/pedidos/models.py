@@ -61,6 +61,8 @@ class Pedido(models.Model):
     en_preparacion_desde = models.DateTimeField(null=True, blank=True)
     listo_desde = models.DateTimeField(null=True, blank=True)
     entregado_desde = models.DateTimeField(null=True, blank=True)
+    # Hora a la que la cocina calcula que estará listo.
+    listo_estimado = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-creado"]
@@ -105,6 +107,13 @@ class Pedido(models.Model):
 
 
 class ItemPedido(models.Model):
+    """Un plato del pedido. La cocina lo va marcando a medida que lo prepara."""
+
+    class Estado(models.TextChoices):
+        PENDIENTE = "pendiente", "En preparación"
+        LISTO = "listo", "Listo"
+        PROBLEMA = "problema", "No se puede preparar"
+
     pedido = models.ForeignKey(Pedido, on_delete=models.CASCADE, related_name="items")
     plato = models.ForeignKey(Plato, on_delete=models.PROTECT, related_name="ventas")
     cantidad = models.PositiveIntegerField(default=1)
@@ -113,6 +122,9 @@ class ItemPedido(models.Model):
     nota = models.CharField(max_length=200, blank=True)
     # Platos que se anexaron después de enviar el pedido: la cocina los ve marcados como nuevos.
     agregado = models.BooleanField(default=False)
+    estado = models.CharField(max_length=10, choices=Estado.choices, default=Estado.PENDIENTE)
+    problema = models.CharField(max_length=150, blank=True)
+    listo_en = models.DateTimeField(null=True, blank=True)
 
     @property
     def subtotal(self):
@@ -130,6 +142,11 @@ class EventoPedido(models.Model):
         ESTADO = "estado", "Cambio de estado"
         NOTA = "nota", "Nota"
         CANCELADO = "cancelado", "Cancelado"
+        ITEM = "item", "Plato listo"
+        PROBLEMA = "problema", "Problema con un plato"
+        CAMBIO = "cambio", "Plato cambiado"
+        MENSAJE = "mensaje", "Mensaje"
+        ESTIMADO = "estimado", "Tiempo estimado"
 
     pedido = models.ForeignKey(Pedido, on_delete=models.CASCADE, related_name="eventos")
     tipo = models.CharField(max_length=10, choices=Tipo.choices)

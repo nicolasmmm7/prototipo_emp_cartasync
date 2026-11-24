@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRightLeft, MessageCircle, Minus, Plus, Trash2 } from 'lucide-react'
-import { SelectorMesa } from '../../components/Pedido'
+import { AvancePedido, SelectorMesa } from '../../components/Pedido'
+import { useAccionPedido } from '../../lib/pedidos'
 import { Boton, Campo, Cargando, Chip, Vacio, useAhora } from '../../components/ui'
 import { api, mensajeError, obtener } from '../../lib/api'
 import { useAvisar } from '../../lib/avisos'
@@ -312,6 +313,8 @@ function PedidosEnCurso() {
     },
     onError: (e) => avisar('No se pudo entregar', 'error', mensajeError(e)),
   })
+  const reemplazar = useAccionPedido('reemplazar', () => ['Plato cambiado', 'exito', 'La cocina ya ve el nuevo plato.'])
+  const quitar = useAccionPedido('quitar', () => ['Plato quitado', 'exito', 'Se avisó a cocina.'])
   const propios = data.filter((p) => p.tipo !== 'mesa')
   return (
     <section className="tarjeta self-start p-5">
@@ -331,6 +334,27 @@ function PedidosEnCurso() {
                 </div>
                 <span className={`shrink-0 rounded-full px-2 py-0.5 text-etiqueta font-semibold ${COLOR[p.estado]}`}>{p.estado_nombre}</span>
               </div>
+              <AvancePedido p={p} />
+              {/* Un plato que la cocina no puede preparar: caja lo resuelve con el cliente. */}
+              {p.items.filter((i) => i.estado === 'problema').map((i) => (
+                <div key={i.id} className="mt-2 rounded-lg bg-agotado-fondo p-2.5">
+                  <p className="text-pequeno font-semibold text-agotado">
+                    {i.cantidad} × {i.plato_nombre}: {i.problema}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {i.alternativo && (
+                      <Boton tamano="sm" disabled={reemplazar.isPending} onClick={() => reemplazar.mutate({ id: p.id, item: i.id, plato: i.alternativo.id })}>
+                        Cambiar por {i.alternativo.nombre}
+                      </Boton>
+                    )}
+                    {p.items.length > 1 && (
+                      <Boton variante="secundario" tamano="sm" disabled={quitar.isPending} onClick={() => quitar.mutate({ id: p.id, item: i.id })}>
+                        Quitar
+                      </Boton>
+                    )}
+                  </div>
+                </div>
+              ))}
               {p.estado === 'listo' && (
                 <Boton variante="oscuro" tamano="sm" className="mt-2 w-full" onClick={() => entregar.mutate(p.id)}>
                   Entregar

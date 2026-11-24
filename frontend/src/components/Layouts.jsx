@@ -34,6 +34,18 @@ function AvisosEnVivo({ para }) {
     if (para === 'cocina' && e.tema === 'pedidos' && e.accion === 'cancelado') {
       avisar(`Se canceló el pedido #${e.pedido}`, 'error', e.etiqueta)
     }
+    // Avance detallado de cocina: lo que debe resolver sala (o caja, si tomó el pedido).
+    const mio = e.mesero === usuario?.id
+    const deSala = para === 'sala' && (e.mesa || mio)
+    if (e.tema === 'pedidos' && e.accion === 'problema' && (deSala || (para === 'caja' && mio))) {
+      avisar(`${e.etiqueta}: no hay ${e.plato}`, 'error', e.alternativo ? `Ofrece ${e.alternativo} y cámbialo en el pedido.` : 'Cámbialo o quítalo del pedido.')
+    }
+    if (e.tema === 'pedidos' && e.accion === 'mensaje' && e.de === 'cocina' && (deSala || (para === 'caja' && mio))) {
+      avisar(`Cocina · ${e.etiqueta}`, 'info', e.texto)
+    }
+    if (para === 'cocina' && e.tema === 'pedidos' && e.accion === 'mensaje' && e.de === 'sala') {
+      avisar(`Sala · ${e.etiqueta}`, 'info', e.texto)
+    }
     if (para === 'caja' && e.tema === 'whatsapp' && e.accion === 'nuevo') {
       avisar('Llegó un pedido por WhatsApp', 'info', 'Revísalo en la bandeja.')
     }

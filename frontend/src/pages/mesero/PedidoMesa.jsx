@@ -2,7 +2,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Plus, Store } from 'lucide-react'
 import { EncabezadoMovil } from '../../components/Layouts'
-import { EstadoPedido } from '../../components/Pedido'
+import { AvancePedido, EstadoPedido } from '../../components/Pedido'
 import { Boton, Cargando, ErrorCarga, Vacio, useAhora } from '../../components/ui'
 import { api, mensajeError, obtener } from '../../lib/api'
 import { useAvisar } from '../../lib/avisos'
@@ -87,6 +87,7 @@ export default function PedidoMesa() {
                     </li>
                   ))}
                 </ul>
+                <AvancePedido p={p} />
                 <p className="mt-2 text-etiqueta font-semibold text-marca">Ver detalle y registro de actualizaciones</p>
               </div>
               <ChevronRight size={18} className="mt-1 shrink-0 text-tenue" />
