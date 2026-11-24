@@ -5,6 +5,7 @@ import { useSesion } from './lib/sesion'
 import { TiempoRealProvider } from './lib/tiempoReal'
 
 import Ingresar from './pages/Ingresar'
+import Demo from './pages/Demo'
 import CartaQR from './pages/comensal/CartaQR'
 import Tablero from './pages/cocina/Tablero'
 import Porciones from './pages/cocina/Porciones'
@@ -53,6 +54,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Inicio />} />
       <Route path="/ingresar" element={<Ingresar />} />
+      <Route path="/demo" element={<Demo />} />
       <Route path="/carta/:slug" element={<CartaQR />} />
 
       <Route element={<Protegida roles={['cocina']} />}>

@@ -1,3 +1,6 @@
+from django.conf import settings
+from django.core.management import call_command
+from django.http import Http404
 from rest_framework import generics, mixins, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -75,3 +78,16 @@ class SolicitudViewSet(
     queryset = SolicitudSoporte.objects.all()
     serializer_class = SolicitudSerializer
     permission_classes = [Roles("admin")]
+
+
+class ReiniciarDemoView(APIView):
+    """Vuelve a cargar los datos de ejemplo desde el modo demostración. Solo en desarrollo."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        if not settings.DEBUG:
+            raise Http404
+        call_command("sembrar", verbosity=0)
+        return Response({"ok": True})

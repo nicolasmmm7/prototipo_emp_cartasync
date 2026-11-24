@@ -1,42 +1,55 @@
-import { useState } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
-import { ChefHat, Smartphone, Store, UserCog } from 'lucide-react'
+import { ArrowRight, LayoutPanelLeft, LoaderCircle } from 'lucide-react'
 import { Boton, Campo, Logo, Modal } from '../components/ui'
 import { mensajeError } from '../lib/api'
 import { useAvisar } from '../lib/avisos'
-import { INICIO_ROL } from '../lib/formato'
+import { CLAVE_DEMO, USUARIOS_DEMO, esUsuarioDemo } from '../lib/demo'
+import { INICIO_ROL, ROLES } from '../lib/formato'
 import { useSesion } from '../lib/sesion'
-
-const DEMO = [
-  { usuario: 'jorge', nombre: 'Jorge', rol: 'Dueño', icono: UserCog },
-  { usuario: 'rosa', nombre: 'Rosa', rol: 'Cocina', icono: ChefHat },
-  { usuario: 'andres', nombre: 'Andrés', rol: 'Mesero', icono: Smartphone },
-  { usuario: 'luis', nombre: 'Luis', rol: 'Caja', icono: Store },
-]
 
 export default function Ingresar() {
   const { usuario, ingresar } = useSesion()
   const nav = useNavigate()
   const avisar = useAvisar()
+  const [params] = useSearchParams()
   const [form, setForm] = useState({ username: '', password: '' })
   const [error, setError] = useState('')
   const [cargando, setCargando] = useState(false)
   const [modal, setModal] = useState(null)
 
-  if (usuario) return <Navigate to={INICIO_ROL[usuario.rol]} replace />
-
-  const entrar = async (username, password) => {
+  const entrar = async (username, password, destino) => {
     setError('')
     setCargando(true)
     try {
       const u = await ingresar(username, password)
-      nav(INICIO_ROL[u.rol])
+      nav(destino || INICIO_ROL[u.rol], { replace: true })
     } catch (e) {
       setError(e.response?.status === 401 ? 'Usuario o contraseña incorrectos.' : mensajeError(e))
     } finally {
       setCargando(false)
     }
+  }
+
+  // Entrada directa para el modo demostración: /ingresar?como=rosa&ir=/cocina
+  const como = params.get('como')
+  const ir = params.get('ir')
+  const lanzado = useRef(false)
+  useEffect(() => {
+    if (!como || !esUsuarioDemo(como) || lanzado.current) return
+    lanzado.current = true
+    // Siempre entra de nuevo: tras "Reiniciar datos" el token guardado ya no sirve.
+    entrar(como, CLAVE_DEMO, ir?.startsWith('/') ? ir : null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [como])
+
+  if (como && esUsuarioDemo(como) && !error) {
+    return (
+      <div className="grid min-h-screen place-items-center text-texto-2">
+        <p className="flex items-center gap-2"><LoaderCircle className="animate-spin" size={20} /> Entrando como {como}…</p>
+      </div>
+    )
   }
 
   return (
@@ -50,6 +63,16 @@ export default function Ingresar() {
           }}
         >
           <Logo />
+          {usuario && (
+            <div className="mt-5 flex items-center justify-between gap-3 rounded-lg bg-marca-suave px-3 py-2.5">
+              <p className="text-pequeno text-marca">
+                Estás como <strong>{usuario.nombre}</strong> · {ROLES[usuario.rol]}
+              </p>
+              <Boton tamano="sm" onClick={() => nav(INICIO_ROL[usuario.rol])}>
+                Continuar <ArrowRight size={16} />
+              </Boton>
+            </div>
+          )}
           <h1 className="mt-6 mb-6 text-h2 sm:text-h1">Ingresa a tu restaurante</h1>
           <div className="space-y-4">
             <Campo etiqueta="Correo o usuario">
@@ -96,21 +119,29 @@ export default function Ingresar() {
           <p className="mb-2 text-center text-etiqueta font-semibold tracking-wide text-tenue uppercase">
             Prototipo · entra como
           </p>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {DEMO.map(({ usuario: u, nombre, rol, icono: I }) => (
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+            {USUARIOS_DEMO.map(({ usuario: u, nombre, rolTexto, icono: I }) => (
               <button
                 key={u}
                 type="button"
                 disabled={cargando}
-                onClick={() => entrar(u, 'cartasync123')}
-                className="tarjeta flex flex-col items-center gap-1 px-2 py-3 hover:border-marca"
+                onClick={() => entrar(u, CLAVE_DEMO)}
+                className={`tarjeta flex flex-col items-center gap-1 px-2 py-3 hover:border-marca ${usuario?.username === u ? 'border-marca bg-marca-suave' : ''}`}
               >
                 <I size={20} className="text-marca" />
                 <span className="text-pequeno font-semibold">{nombre}</span>
-                <span className="text-etiqueta text-texto-2">{rol}</span>
+                <span className="text-etiqueta text-texto-2">{rolTexto}</span>
               </button>
             ))}
           </div>
+          <p className="mt-3 text-center text-etiqueta text-texto-2">
+            Cada pestaña tiene su propia sesión: abre varias para tener cocina, mesero y caja a la vez.
+          </p>
+          <Link to="/demo" className="mt-3 block">
+            <Boton variante="secundario" className="w-full">
+              <LayoutPanelLeft size={18} /> Modo demostración: todos los roles en una pantalla
+            </Boton>
+          </Link>
         </div>
       </div>
 
