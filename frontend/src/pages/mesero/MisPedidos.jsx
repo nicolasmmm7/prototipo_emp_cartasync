@@ -1,79 +1,105 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ClipboardList } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { ChevronRight, ClipboardList, Plus, ShoppingBag } from 'lucide-react'
 import { EncabezadoMovil } from '../../components/Layouts'
-import { Boton, Cargando, ErrorCarga, Vacio, useAhora } from '../../components/ui'
-import { api, mensajeError, obtener } from '../../lib/api'
-import { useAvisar } from '../../lib/avisos'
+import { AvancePedido, EstadoPedido, SelectorMesa } from '../../components/Pedido'
+import { Boton, Cargando, Chip, ErrorCarga, Vacio, useAhora } from '../../components/ui'
+import { obtener } from '../../lib/api'
 import { dinero, hace } from '../../lib/formato'
 
-const COLOR = {
-  recibido: 'bg-marca-suave text-marca',
-  en_preparacion: 'bg-por-agotarse-fondo text-por-agotarse-texto',
-  listo: 'bg-disponible text-white',
-}
+const FILTROS = [
+  { clave: 'curso', texto: 'En curso', params: { activos: 1 } },
+  { clave: 'servidos', texto: 'Servidos hoy', params: { estado: 'entregado', hoy: 1 } },
+  { clave: 'cancelados', texto: 'Cancelados', params: { estado: 'cancelado', hoy: 1 } },
+]
 
-/** Pedidos activos del turno (mesas y para llevar). */
+/** Mesero — pedidos del turno: crear uno nuevo y seguir cada pedido. */
 export default function MisPedidos() {
   const nav = useNavigate()
   const ahora = useAhora()
-  const qc = useQueryClient()
-  const avisar = useAvisar()
+  const [filtro, setFiltro] = useState('curso')
+  const [mios, setMios] = useState(false)
+  const [eligiendo, setEligiendo] = useState(false)
+  const f = FILTROS.find((x) => x.clave === filtro)
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['pedidos', 'activos'],
-    queryFn: () => obtener('/pedidos/', { activos: 1 }),
-  })
-  const entregar = useMutation({
-    mutationFn: (id) => api.post(`/pedidos/${id}/avanzar/`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['pedidos'] })
-      avisar('Pedido entregado', 'exito')
-    },
-    onError: (e) => avisar('No se pudo marcar', 'error', mensajeError(e)),
+    queryKey: ['pedidos', 'sala', filtro, mios],
+    queryFn: () => obtener('/pedidos/', { ...f.params, ...(mios ? { mios: 1 } : { sala: 1 }) }),
   })
 
   return (
     <>
-      <EncabezadoMovil titulo="Pedidos activos" subtitulo="Mesas y para llevar del turno" />
-      {isLoading ? (
-        <Cargando />
-      ) : error ? (
-        <ErrorCarga error={error} reintentar={refetch} />
-      ) : data.length === 0 ? (
-        <Vacio icono={ClipboardList} titulo="No hay pedidos activos" texto="Los pedidos que envíes a cocina aparecen aquí." />
-      ) : (
-        <ul className="space-y-3 p-4">
-          {data
-            .filter((p) => p.tipo === 'mesa' || p.origen === 'sala')
-            .map((p) => (
-              <li key={p.id} className="tarjeta p-4">
+      <EncabezadoMovil
+        titulo="Pedidos"
+        subtitulo="Crea pedidos y sigue cada actualización"
+        derecha={
+          <Boton tamano="sm" onClick={() => setEligiendo(true)}>
+            <Plus size={16} /> Nuevo pedido
+          </Boton>
+        }
+      />
+      <div className="space-y-3 p-4">
+        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1">
+          {FILTROS.map((x) => (
+            <Chip key={x.clave} activo={filtro === x.clave} onClick={() => setFiltro(x.clave)}>{x.texto}</Chip>
+          ))}
+        </div>
+        <label className="flex items-center gap-2 text-pequeno text-texto-2">
+          <input type="checkbox" className="size-4 accent-marca" checked={mios} onChange={(e) => setMios(e.target.checked)} />
+          Solo los que tomé yo
+        </label>
+
+        {isLoading ? (
+          <Cargando />
+        ) : error ? (
+          <ErrorCarga error={error} reintentar={refetch} />
+        ) : data.length === 0 ? (
+          <div className="tarjeta">
+            <Vacio icono={ClipboardList} titulo="No hay pedidos aquí" texto="Toca “Nuevo pedido” para tomar uno y anexarlo a una mesa.">
+              <Boton onClick={() => setEligiendo(true)}><Plus size={18} /> Nuevo pedido</Boton>
+            </Vacio>
+          </div>
+        ) : (
+          <ul className="space-y-3">
+            {data.map((p) => (
+              <li key={p.id}>
                 <button
                   type="button"
-                  className="w-full text-left"
-                  onClick={() => p.mesa && nav(`/mesero/mesa/${p.mesa}`)}
+                  onClick={() => nav(`/mesero/pedido/${p.id}`)}
+                  className={`tarjeta flex w-full items-center gap-3 p-4 text-left hover:border-borde-fuerte ${p.estado === 'listo' ? 'border-2 border-disponible' : ''}`}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
                       <p className="font-semibold">{p.etiqueta}</p>
-                      <p className="text-pequeno text-texto-2">
-                        #{p.id} · {hace(p.creado, ahora)} · {dinero(p.total)}
-                      </p>
+                      <EstadoPedido pedido={p} />
                     </div>
-                    <span className={`rounded-full px-2.5 py-1 text-etiqueta font-semibold ${COLOR[p.estado]}`}>{p.estado_nombre}</span>
+                    <p className="text-pequeno text-texto-2">
+                      #{p.id} · {hace(p.creado, ahora)} · {dinero(p.total)} · {p.creado_por_nombre}
+                    </p>
+                    <p className="mt-1.5 truncate text-pequeno">
+                      {p.items.map((i) => `${i.cantidad} × ${i.plato_nombre}`).join(' · ')}
+                    </p>
+                    <AvancePedido p={p} />
                   </div>
-                  <p className="mt-2 text-pequeno text-texto-2">
-                    {p.items.map((i) => `${i.cantidad} × ${i.plato_nombre}`).join(' · ')}
-                  </p>
+                  <ChevronRight size={18} className="shrink-0 text-tenue" />
                 </button>
-                {p.estado === 'listo' && !p.mesa && (
-                  <Boton variante="oscuro" className="mt-3 w-full" onClick={() => entregar.mutate(p.id)}>
-                    Marcar entregado
-                  </Boton>
-                )}
               </li>
             ))}
-        </ul>
-      )}
+          </ul>
+        )}
+      </div>
+
+      <SelectorMesa
+        abierto={eligiendo}
+        titulo="Nuevo pedido · ¿para qué mesa?"
+        onCerrar={() => setEligiendo(false)}
+        onElegir={(m) => nav(`/mesero/nuevo/mesa/${m.id}`)}
+        extra={
+          <Boton variante="secundario" className="mt-4 w-full" onClick={() => nav('/mesero/nuevo/llevar')}>
+            <ShoppingBag size={18} /> Es para llevar
+          </Boton>
+        }
+      />
     </>
   )
 }

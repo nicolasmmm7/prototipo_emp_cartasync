@@ -14,7 +14,7 @@ from django.utils import timezone
 from carta.models import CambioEstado, Calificacion, Categoria, Plato
 from cuentas.models import Restaurante, Sede, SolicitudSoporte, Usuario
 from inventario.models import Producto
-from pedidos.models import ItemPedido, Mesa, MensajeWhatsApp, Pedido
+from pedidos.models import EventoPedido, ItemPedido, Mesa, MensajeWhatsApp, Pedido
 
 CLAVE = "cartasync123"
 
@@ -156,7 +156,8 @@ class Command(BaseCommand):
                 tipo = random.choices(["mesa", "llevar", "domicilio", "mostrador"], weights=[60, 15, 15, 10])[0]
                 pedidos.append(Pedido(
                     restaurante=r, tipo=tipo, origen="whatsapp" if tipo == "domicilio" else "sala" if tipo == "mesa" else "caja",
-                    mesa=random.choice(mesas) if tipo == "mesa" else None,
+                    # Lo que se come en el local (mesa o mostrador) queda en una mesa.
+                    mesa=random.choice(mesas) if tipo in ("mesa", "mostrador") else None,
                     creado_por=random.choice(meseros) if tipo == "mesa" else usuarios["luis"],
                     estado="entregado", creado=cuando, en_preparacion_desde=cuando + timedelta(minutes=2),
                     listo_desde=cuando + timedelta(minutes=15), entregado_desde=cuando + timedelta(minutes=18),
@@ -177,7 +178,8 @@ class Command(BaseCommand):
             for nombre in set(elegidos):
                 p = platos[nombre]
                 items.append(ItemPedido(pedido=pedido, plato=p, cantidad=elegidos.count(nombre),
-                                        precio_unitario=p.precio, costo_unitario=p.costo))
+                                        precio_unitario=p.precio, costo_unitario=p.costo,
+                                        estado="listo", listo_en=pedido.listo_desde))
         ItemPedido.objects.bulk_create(items, batch_size=1000)
         CambioEstado.objects.bulk_create(cambios)
 
@@ -226,15 +228,47 @@ class Command(BaseCommand):
             for nombre, cant, nota in platos_:
                 p = platos[nombre]
                 ItemPedido.objects.create(pedido=ped, plato=p, cantidad=cant, precio_unitario=p.precio,
-                                          costo_unitario=p.costo, nota=nota)
+                                          costo_unitario=p.costo, nota=nota,
+                                          estado="listo" if estado in ("listo", "entregado") else "pendiente",
+                                          listo_en=ped.listo_desde)
+            # Historial del pedido, como si se hubiera ido actualizando durante el servicio.
+            detalle = ", ".join(f"{c} × {n}" for n, c, _ in platos_)
+            eventos = [(creado, "creado", f"Pedido creado para {ped.etiqueta}: {detalle}", ped.creado_por)]
+            if ped.nota:
+                eventos.append((creado, "nota", f"Nota para cocina: {ped.nota}", ped.creado_por))
+            if ped.en_preparacion_desde:
+                eventos.append((ped.en_preparacion_desde, "estado", "La cocina empezó a prepararlo", rosa))
+            if ped.listo_desde:
+                eventos.append((ped.listo_desde, "estado", "Listo para servir", rosa))
+            if ped.entregado_desde:
+                eventos.append((ped.entregado_desde, "estado", "Servido / entregado al cliente", ped.creado_por))
+            EventoPedido.objects.bulk_create(
+                [EventoPedido(pedido=ped, creado=c, tipo=t, texto=x, usuario=u) for c, t, x, u in eventos])
             if mesa and not mesa.abierta_desde:
                 mesa.abierta_desde = creado
                 mesa.save(update_fields=["abierta_desde"])
             return ped
 
         m = {x.numero: x for x in mesas}
-        pedido_hoy(m[1], estado="en_preparacion", hace=12, platos_=[
+        p1 = pedido_hoy(m[1], estado="en_preparacion", hace=12, platos_=[
             ("Bandeja paisa", 2, "Una sin chicharrón"), ("Pechuga a la plancha", 1, ""), ("Limonada natural", 3, "")])
+        # Avance detallado de la cocina en la mesa 1: un plato listo, tiempo estimado y un problema
+        # (se acabó el limón) que el mesero debe resolver cambiando o quitando la limonada.
+        def evento(ped, minutos, tipo, texto, usuario):
+            EventoPedido.objects.create(pedido=ped, tipo=tipo, texto=texto, usuario=usuario,
+                                        creado=ahora - timedelta(minutes=minutos))
+        p1.listo_estimado = ahora + timedelta(minutes=6)
+        p1.save(update_fields=["listo_estimado"])
+        evento(p1, 10, "estimado", f"Sale en unos 16 min (aprox. {timezone.localtime(p1.listo_estimado).strftime('%H:%M')})", rosa)
+        pechuga = p1.items.get(plato=platos["Pechuga a la plancha"])
+        pechuga.estado, pechuga.listo_en = "listo", ahora - timedelta(minutes=4)
+        pechuga.save(update_fields=["estado", "listo_en"])
+        evento(p1, 4, "item", "Plato listo: 1 × Pechuga a la plancha (1 de 3)", rosa)
+        limonada = p1.items.get(plato=platos["Limonada natural"])
+        limonada.estado, limonada.problema = "problema", "Se acabó el limón"
+        limonada.save(update_fields=["estado", "problema"])
+        evento(p1, 3, "problema", "No se puede preparar 3 × Limonada natural: Se acabó el limón", rosa)
+        evento(p1, 2, "mensaje", "Mensaje de cocina: Las bandejas salen en 5 minutos", rosa)
         pedido_hoy(m[2], estado="listo", hace=18, platos_=[("Almuerzo corriente del día", 2, "")], por=usuarios["camila"])
         pedido_hoy(m[4], estado="entregado", hace=35, platos_=[
             ("Carne guisada", 2, ""), ("Caldo de costilla", 2, "")], por=usuarios["camila"])
@@ -242,6 +276,9 @@ class Command(BaseCommand):
         pedido_hoy(tipo="domicilio", estado="recibido", hace=2, origen="whatsapp", por=usuarios["luis"],
                    cliente="Pedro", telefono="311 000 0000", direccion="Calle 10 #4-32",
                    nota="Sin cebolla en la mojarra", platos_=[("Bandeja paisa", 1, ""), ("Mojarra frita", 1, "")])
+        # Venta de mostrador: se pidió y pagó en caja, pero el cliente come en la mesa 6.
+        pedido_hoy(m[6], tipo="mostrador", estado="en_preparacion", hace=7, origen="caja", por=usuarios["luis"],
+                   cliente="Don Álvaro", platos_=[("Pechuga a la plancha", 1, ""), ("Jugo de mora", 1, "")])
         pedido_hoy(tipo="llevar", estado="en_preparacion", hace=9, por=usuarios["luis"], cliente="Sra. Marta",
                    platos_=[("Almuerzo corriente del día", 3, "")])
 

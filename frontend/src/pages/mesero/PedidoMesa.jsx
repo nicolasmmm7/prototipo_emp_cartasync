@@ -1,20 +1,14 @@
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check } from 'lucide-react'
+import { ChevronRight, Plus, Store } from 'lucide-react'
 import { EncabezadoMovil } from '../../components/Layouts'
+import { AvancePedido, EstadoPedido } from '../../components/Pedido'
 import { Boton, Cargando, ErrorCarga, Vacio, useAhora } from '../../components/ui'
 import { api, mensajeError, obtener } from '../../lib/api'
 import { useAvisar } from '../../lib/avisos'
 import { dinero, hace, hora } from '../../lib/formato'
 
-const PASOS = [
-  { estado: 'recibido', texto: 'Recibido por cocina', campo: 'creado' },
-  { estado: 'en_preparacion', texto: 'En preparación', campo: 'en_preparacion_desde', prefijo: 'Desde las' },
-  { estado: 'listo', texto: 'Listo para servir', campo: 'listo_desde', pendiente: 'Te avisaremos aquí' },
-]
-const ORDEN = ['recibido', 'en_preparacion', 'listo', 'entregado']
-
-/** 2B · Mesero — estado del pedido de una mesa. */
+/** 2B · Mesero — la cuenta de una mesa: todos los pedidos anexados a ella. */
 export default function PedidoMesa() {
   const { mesaId } = useParams()
   const nav = useNavigate()
@@ -32,7 +26,7 @@ export default function PedidoMesa() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['pedidos'] })
       qc.invalidateQueries({ queryKey: ['mesas'] })
-      avisar('Mesa servida', 'exito')
+      avisar('Pedido servido', 'exito')
     },
     onError: (e) => avisar('No se pudo marcar', 'error', mensajeError(e)),
   })
@@ -50,103 +44,78 @@ export default function PedidoMesa() {
   if (error) return <ErrorCarga error={error} reintentar={refetch} />
 
   const ordenados = [...pedidos].sort((a, b) => new Date(a.creado) - new Date(b.creado))
-  const total = ordenados.reduce((s, p) => s + p.total, 0)
-  const listo = ordenados.find((p) => p.estado === 'listo')
-  const todoServido = ordenados.length > 0 && ordenados.every((p) => p.estado === 'entregado' || p.estado === 'cancelado')
-  const ultimo = ordenados.at(-1)
+  const validos = ordenados.filter((p) => p.estado !== 'cancelado')
+  const total = validos.reduce((s, p) => s + p.total, 0)
+  const todoServido = validos.length > 0 && validos.every((p) => p.estado === 'entregado')
 
   return (
     <>
       <EncabezadoMovil
-        titulo={`Mesa ${mesa?.numero ?? ''}${ultimo ? ` · Pedido #${ultimo.id}` : ''}`}
-        subtitulo={ultimo ? `Enviado a las ${hora(ultimo.creado)} · ${hace(ultimo.creado, ahora)}` : ''}
+        titulo={`Mesa ${mesa?.numero ?? ''}`}
+        subtitulo={mesa?.abierta_desde ? `Cuenta abierta a las ${hora(mesa.abierta_desde)} · ${validos.length} pedido${validos.length === 1 ? '' : 's'}` : 'Sin cuenta abierta'}
         atras="/mesero"
       />
-      <div className="space-y-4 p-4 pb-36">
+      <div className="space-y-3 p-4 pb-36">
         {ordenados.length === 0 && (
           <div className="tarjeta">
             <Vacio titulo="Esta mesa no tiene pedidos" texto="Toma el pedido para enviarlo a cocina." />
           </div>
         )}
-        {ordenados.map((p) => {
-          const paso = ORDEN.indexOf(p.estado)
-          return (
-            <section key={p.id} className="space-y-3">
-              {ordenados.length > 1 && <p className="text-pequeno font-semibold text-texto-2">Pedido #{p.id}</p>}
-              {p.estado === 'entregado' ? (
-                <p className="rounded-xl bg-disponible-fondo px-4 py-3 text-pequeno font-semibold text-disponible">
-                  Servido a las {hora(p.entregado_desde)}
+        {ordenados.map((p) => (
+          <article key={p.id} className={`tarjeta overflow-hidden ${p.estado === 'listo' ? 'border-2 border-disponible' : ''} ${p.estado === 'cancelado' ? 'opacity-60' : ''}`}>
+            <button type="button" onClick={() => nav(`/mesero/pedido/${p.id}`)} className="flex w-full items-start gap-3 p-4 text-left hover:bg-pagina">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="font-semibold">
+                    Pedido #{p.id}
+                    {p.tipo === 'mostrador' && (
+                      <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-pagina px-2 py-0.5 text-etiqueta font-medium text-texto-2">
+                        <Store size={12} /> Caja
+                      </span>
+                    )}
+                  </p>
+                  <EstadoPedido pedido={p} />
+                </div>
+                <p className="text-pequeno text-texto-2">
+                  {hora(p.creado)} · {hace(p.creado, ahora)} · {p.creado_por_nombre} · {dinero(p.total)}
                 </p>
-              ) : (
-                <ol className="tarjeta space-y-0 p-4">
-                  {PASOS.map((s, i) => {
-                    const hecho = paso > i || (paso === i && i === 0)
-                    const actual = paso === i && i > 0
-                    return (
-                      <li key={s.estado} className="relative flex gap-3 pb-4 last:pb-0">
-                        {i < PASOS.length - 1 && (
-                          <span className={`absolute top-7 left-[13px] h-[calc(100%-24px)] w-0.5 ${paso > i ? 'bg-texto' : 'bg-borde'}`} />
-                        )}
-                        <span
-                          className={`relative z-10 grid size-7 shrink-0 place-items-center rounded-full border-2 ${
-                            hecho ? 'border-texto bg-texto text-white' : actual ? 'border-texto bg-superficie' : 'border-dashed border-borde-fuerte bg-superficie'
-                          }`}
-                        >
-                          {hecho ? <Check size={14} strokeWidth={3} /> : actual ? <span className="size-2.5 rounded-full bg-texto" /> : null}
-                        </span>
-                        <div>
-                          <p className={`font-semibold ${!hecho && !actual ? 'text-tenue' : ''}`}>{s.texto}</p>
-                          <p className="text-pequeno text-texto-2">
-                            {p[s.campo] ? `${s.prefijo ?? ''} ${hora(p[s.campo])}`.trim() : s.pendiente ?? ''}
-                          </p>
-                        </div>
-                      </li>
-                    )
-                  })}
-                </ol>
-              )}
-              <ul className="tarjeta divide-y divide-borde">
-                {p.items.map((i) => (
-                  <li key={i.id} className="flex justify-between gap-3 px-4 py-3">
-                    <div>
-                      <p className="font-medium">
-                        {i.plato_nombre} × {i.cantidad}
-                      </p>
-                      {i.nota && <p className="text-pequeno text-texto-2">{i.nota}</p>}
-                    </div>
-                    <p className="font-semibold">{dinero(i.subtotal)}</p>
-                  </li>
-                ))}
-              </ul>
-              {p.nota && <p className="rounded-lg bg-superficie px-4 py-2 text-pequeno text-texto-2">Nota: {p.nota}</p>}
-            </section>
-          )
-        })}
-        {ordenados.length > 0 && (
+                <ul className="mt-2 space-y-0.5 text-pequeno">
+                  {p.items.map((i) => (
+                    <li key={i.id}>
+                      {i.cantidad} × {i.plato_nombre}
+                      {i.agregado && <span className="ml-1.5 text-etiqueta font-semibold text-acento">· agregado</span>}
+                    </li>
+                  ))}
+                </ul>
+                <AvancePedido p={p} />
+                <p className="mt-2 text-etiqueta font-semibold text-marca">Ver detalle y registro de actualizaciones</p>
+              </div>
+              <ChevronRight size={18} className="mt-1 shrink-0 text-tenue" />
+            </button>
+            {p.estado === 'listo' && (
+              <div className="border-t border-borde px-4 py-3">
+                <Boton variante="oscuro" className="w-full" cargando={servir.isPending && servir.variables === p.id} onClick={() => servir.mutate(p.id)}>
+                  Marcar servido
+                </Boton>
+              </div>
+            )}
+          </article>
+        ))}
+        {validos.length > 0 && (
           <div className="tarjeta flex justify-between px-4 py-3">
-            <span className="text-h3 font-semibold">Total</span>
+            <span className="text-h3 font-semibold">Total de la cuenta</span>
             <span className="text-h3 font-bold">{dinero(total)}</span>
           </div>
         )}
       </div>
 
       <footer className="fixed inset-x-0 bottom-16 z-20 mx-auto flex max-w-md gap-2 border-t border-borde bg-superficie px-4 py-3">
-        <Boton variante="secundario" className="flex-1" onClick={() => nav(`/mesero/nuevo/mesa/${mesaId}`)}>
-          Agregar platos
+        <Boton variante={todoServido ? 'secundario' : 'oscuro'} className="flex-1" onClick={() => nav(`/mesero/nuevo/mesa/${mesaId}`)}>
+          <Plus size={18} /> Nuevo pedido
         </Boton>
-        {todoServido ? (
+        {todoServido && (
           <Boton className="flex-1" cargando={liberar.isPending} onClick={() => liberar.mutate()}>
-            Liberar mesa
-          </Boton>
-        ) : (
-          <Boton
-            variante="oscuro"
-            className="flex-1"
-            disabled={!listo}
-            cargando={servir.isPending}
-            onClick={() => listo && servir.mutate(listo.id)}
-          >
-            Marcar servido
+            Cobrar y liberar
           </Boton>
         )}
       </footer>

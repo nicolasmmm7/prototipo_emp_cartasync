@@ -1,22 +1,27 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { MessageCircle, Minus, Plus, Trash2 } from 'lucide-react'
+import { ArrowRightLeft, MessageCircle, Minus, Plus, Trash2 } from 'lucide-react'
+import { AvancePedido, SelectorMesa } from '../../components/Pedido'
+import { useAccionPedido } from '../../lib/pedidos'
 import { Boton, Campo, Cargando, Chip, Vacio, useAhora } from '../../components/ui'
 import { api, mensajeError, obtener } from '../../lib/api'
 import { useAvisar } from '../../lib/avisos'
 import { dinero, hace, hora } from '../../lib/formato'
 
+// El pedido de mostrador se come en el local: siempre queda ligado a una mesa.
 const TIPOS = [
-  { clave: 'mostrador', texto: 'Mostrador' },
+  { clave: 'mostrador', texto: 'Mostrador (come aquí)' },
   { clave: 'llevar', texto: 'Para llevar' },
   { clave: 'domicilio', texto: 'Domicilio' },
 ]
-const VACIO = { tipo: 'mostrador', cliente: '', telefono: '', direccion: '', nota: '', whatsapp: null }
+const VACIO = { tipo: 'mostrador', mesa: null, cliente: '', telefono: '', direccion: '', nota: '', whatsapp: null }
 
 /** 2D · Caja — mostrador, para llevar y domicilios. */
 export default function Caja() {
   const [form, setForm] = useState(VACIO)
   const [carrito, setCarrito] = useState({})
+  const [mesa, setMesa] = useState(null) // { id, numero } elegida para el pedido de mostrador
+  const [eligiendoMesa, setEligiendoMesa] = useState(false)
   const avisar = useAvisar()
   const qc = useQueryClient()
   const { data: platos } = useQuery({ queryKey: ['platos'], queryFn: () => obtener('/platos/') })
@@ -44,12 +49,14 @@ export default function Caja() {
     mutationFn: () =>
       api.post('/pedidos/', {
         ...form,
+        mesa: form.tipo === 'mostrador' ? mesa?.id : null,
         items: items.map(([plato, cantidad]) => ({ plato: Number(plato), cantidad })),
       }),
     onSuccess: ({ data }) => {
-      avisar('Venta registrada', 'exito', `#${data.id} · ${dinero(data.total)} · enviado a cocina`)
+      avisar('Venta registrada', 'exito', `${data.etiqueta} · #${data.id} · ${dinero(data.total)} · enviado a cocina`)
       setForm(VACIO)
       setCarrito({})
+      setMesa(null)
       qc.invalidateQueries({ queryKey: ['whatsapp'] })
     },
     onError: (e) => {
@@ -90,6 +97,25 @@ export default function Caja() {
             </span>
           )}
         </div>
+        {form.tipo === 'mostrador' && (
+          <button
+            type="button"
+            onClick={() => setEligiendoMesa(true)}
+            className={`mb-4 flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3 text-left ${
+              mesa ? 'border-marca bg-marca-suave' : 'border-dashed border-acento bg-acento-suave'
+            }`}
+          >
+            <span className="text-h3 font-bold">{mesa ? `Mesa ${mesa.numero}` : 'Elige la mesa'}</span>
+            <span className="flex-1 text-pequeno text-texto-2">
+              {mesa
+                ? mesa.estado === 'libre' ? 'Se abre la cuenta de la mesa' : 'Se suma a la cuenta abierta de la mesa'
+                : 'Obligatorio: ¿en qué mesa se sienta el cliente?'}
+            </span>
+            <span className="flex items-center gap-1 text-pequeno font-semibold text-marca">
+              <ArrowRightLeft size={16} /> {mesa ? 'Cambiar' : 'Elegir'}
+            </span>
+          </button>
+        )}
         <div className="grid gap-3 sm:grid-cols-2">
           <Campo etiqueta="Cliente">
             <input className="campo" value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} />
@@ -166,16 +192,32 @@ export default function Caja() {
             </div>
             <div className="flex gap-2">
               {(items.length > 0 || form.whatsapp) && (
-                <Boton variante="secundario" onClick={() => { setForm(VACIO); setCarrito({}) }}>
+                <Boton variante="secundario" onClick={() => { setForm(VACIO); setCarrito({}); setMesa(null) }}>
                   Limpiar
                 </Boton>
               )}
-              <Boton tamano="lg" disabled={!items.length} cargando={registrar.isPending} onClick={() => registrar.mutate()}>
+              <Boton
+                tamano="lg"
+                disabled={!items.length || (form.tipo === 'mostrador' && !mesa)}
+                title={form.tipo === 'mostrador' && !mesa ? 'Elige la mesa del cliente' : undefined}
+                cargando={registrar.isPending}
+                onClick={() => registrar.mutate()}
+              >
                 Registrar venta
               </Boton>
             </div>
           </div>
         </div>
+        <SelectorMesa
+          abierto={eligiendoMesa}
+          actual={mesa?.id}
+          titulo="¿En qué mesa se sienta el cliente?"
+          onCerrar={() => setEligiendoMesa(false)}
+          onElegir={(m) => {
+            setMesa(m)
+            setEligiendoMesa(false)
+          }}
+        />
       </section>
 
       <PedidosEnCurso />
@@ -271,6 +313,8 @@ function PedidosEnCurso() {
     },
     onError: (e) => avisar('No se pudo entregar', 'error', mensajeError(e)),
   })
+  const reemplazar = useAccionPedido('reemplazar', () => ['Plato cambiado', 'exito', 'La cocina ya ve el nuevo plato.'])
+  const quitar = useAccionPedido('quitar', () => ['Plato quitado', 'exito', 'Se avisó a cocina.'])
   const propios = data.filter((p) => p.tipo !== 'mesa')
   return (
     <section className="tarjeta self-start p-5">
@@ -290,6 +334,27 @@ function PedidosEnCurso() {
                 </div>
                 <span className={`shrink-0 rounded-full px-2 py-0.5 text-etiqueta font-semibold ${COLOR[p.estado]}`}>{p.estado_nombre}</span>
               </div>
+              <AvancePedido p={p} />
+              {/* Un plato que la cocina no puede preparar: caja lo resuelve con el cliente. */}
+              {p.items.filter((i) => i.estado === 'problema').map((i) => (
+                <div key={i.id} className="mt-2 rounded-lg bg-agotado-fondo p-2.5">
+                  <p className="text-pequeno font-semibold text-agotado">
+                    {i.cantidad} × {i.plato_nombre}: {i.problema}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {i.alternativo && (
+                      <Boton tamano="sm" disabled={reemplazar.isPending} onClick={() => reemplazar.mutate({ id: p.id, item: i.id, plato: i.alternativo.id })}>
+                        Cambiar por {i.alternativo.nombre}
+                      </Boton>
+                    )}
+                    {p.items.length > 1 && (
+                      <Boton variante="secundario" tamano="sm" disabled={quitar.isPending} onClick={() => quitar.mutate({ id: p.id, item: i.id })}>
+                        Quitar
+                      </Boton>
+                    )}
+                  </div>
+                </div>
+              ))}
               {p.estado === 'listo' && (
                 <Boton variante="oscuro" tamano="sm" className="mt-2 w-full" onClick={() => entregar.mutate(p.id)}>
                   Entregar

@@ -61,6 +61,8 @@ class Pedido(models.Model):
     en_preparacion_desde = models.DateTimeField(null=True, blank=True)
     listo_desde = models.DateTimeField(null=True, blank=True)
     entregado_desde = models.DateTimeField(null=True, blank=True)
+    # Hora a la que la cocina calcula que estará listo.
+    listo_estimado = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-creado"]
@@ -73,11 +75,21 @@ class Pedido(models.Model):
     def etiqueta(self):
         if self.tipo == self.Tipo.MESA and self.mesa:
             return f"Mesa {self.mesa.numero}"
+        if self.tipo == self.Tipo.MOSTRADOR and self.mesa:
+            return f"Mesa {self.mesa.numero} · mostrador"
         if self.tipo == self.Tipo.DOMICILIO:
             return f"Domicilio · {self.direccion}" if self.direccion else "Domicilio"
         if self.tipo == self.Tipo.LLEVAR:
             return f"Para llevar · {self.cliente}" if self.cliente else "Para llevar"
         return f"Mostrador · {self.cliente}" if self.cliente else "Mostrador"
+
+    @property
+    def activo(self):
+        return self.estado in (self.Estado.RECIBIDO, self.Estado.EN_PREPARACION, self.Estado.LISTO)
+
+    def registrar(self, tipo, texto, usuario=None):
+        """Deja constancia de una actualización del pedido en su historial."""
+        return EventoPedido.objects.create(pedido=self, tipo=tipo, texto=texto, usuario=usuario)
 
     def avanzar(self):
         siguiente = self.SIGUIENTE.get(self.estado)
@@ -95,16 +107,55 @@ class Pedido(models.Model):
 
 
 class ItemPedido(models.Model):
+    """Un plato del pedido. La cocina lo va marcando a medida que lo prepara."""
+
+    class Estado(models.TextChoices):
+        PENDIENTE = "pendiente", "En preparación"
+        LISTO = "listo", "Listo"
+        PROBLEMA = "problema", "No se puede preparar"
+
     pedido = models.ForeignKey(Pedido, on_delete=models.CASCADE, related_name="items")
     plato = models.ForeignKey(Plato, on_delete=models.PROTECT, related_name="ventas")
     cantidad = models.PositiveIntegerField(default=1)
     precio_unitario = models.PositiveIntegerField()
     costo_unitario = models.PositiveIntegerField(default=0)
     nota = models.CharField(max_length=200, blank=True)
+    # Platos que se anexaron después de enviar el pedido: la cocina los ve marcados como nuevos.
+    agregado = models.BooleanField(default=False)
+    estado = models.CharField(max_length=10, choices=Estado.choices, default=Estado.PENDIENTE)
+    problema = models.CharField(max_length=150, blank=True)
+    listo_en = models.DateTimeField(null=True, blank=True)
 
     @property
     def subtotal(self):
         return self.cantidad * self.precio_unitario
+
+
+class EventoPedido(models.Model):
+    """Registro de actualizaciones de un pedido: quién hizo qué y cuándo."""
+
+    class Tipo(models.TextChoices):
+        CREADO = "creado", "Creado"
+        PLATOS = "platos", "Platos agregados"
+        QUITADO = "quitado", "Plato quitado"
+        MESA = "mesa", "Cambio de mesa"
+        ESTADO = "estado", "Cambio de estado"
+        NOTA = "nota", "Nota"
+        CANCELADO = "cancelado", "Cancelado"
+        ITEM = "item", "Plato listo"
+        PROBLEMA = "problema", "Problema con un plato"
+        CAMBIO = "cambio", "Plato cambiado"
+        MENSAJE = "mensaje", "Mensaje"
+        ESTIMADO = "estimado", "Tiempo estimado"
+
+    pedido = models.ForeignKey(Pedido, on_delete=models.CASCADE, related_name="eventos")
+    tipo = models.CharField(max_length=10, choices=Tipo.choices)
+    texto = models.CharField(max_length=300)
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    creado = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["creado", "id"]
 
 
 class MensajeWhatsApp(models.Model):

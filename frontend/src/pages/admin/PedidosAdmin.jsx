@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Boton, Cargando, Chip, ErrorCarga, useAhora } from '../../components/ui'
+import { EstadoPedido, HistorialPedido, ItemsPedido } from '../../components/Pedido'
+import { Boton, Cargando, Chip, ErrorCarga, Modal, useAhora } from '../../components/ui'
 import { api, mensajeError, obtener } from '../../lib/api'
 import { useAvisar } from '../../lib/avisos'
 import { dinero, hace, hora } from '../../lib/formato'
@@ -27,6 +28,7 @@ export default function PedidosAdmin() {
     queryKey: ['pedidos', filtro],
     queryFn: () => obtener('/pedidos/', filtro === 'activos' ? { activos: 1 } : { hoy: 1, limite: 300 }),
   })
+  const [detalle, setDetalle] = useState(null)
   const cancelar = useMutation({
     mutationFn: (id) => api.post(`/pedidos/${id}/cancelar/`),
     onSuccess: () => {
@@ -74,7 +76,7 @@ export default function PedidosAdmin() {
               </thead>
               <tbody className="divide-y divide-borde">
                 {data.map((p) => (
-                  <tr key={p.id} className="hover:bg-pagina">
+                  <tr key={p.id} className="cursor-pointer hover:bg-pagina" onClick={() => setDetalle(p.id)} title="Ver detalle e historial">
                     <td className="px-4 py-3 text-texto-2">{p.id}</td>
                     <td className="px-4 py-3">
                       <p className="font-semibold">{p.etiqueta}</p>
@@ -86,7 +88,7 @@ export default function PedidosAdmin() {
                     <td className="px-4 py-3 text-right font-semibold tabular-nums">{dinero(p.total)}</td>
                     <td className="px-4 py-3 text-right">
                       {['recibido', 'en_preparacion', 'listo'].includes(p.estado) && (
-                        <Boton variante="fantasma" tamano="sm" onClick={() => confirm(`¿Cancelar el pedido #${p.id}?`) && cancelar.mutate(p.id)}>Cancelar</Boton>
+                        <Boton variante="fantasma" tamano="sm" onClick={(e) => { e.stopPropagation(); confirm(`¿Cancelar el pedido #${p.id}?`) && cancelar.mutate(p.id) }}>Cancelar</Boton>
                       )}
                     </td>
                   </tr>
@@ -99,6 +101,37 @@ export default function PedidosAdmin() {
           </div>
         </>
       )}
+      <DetallePedidoModal id={detalle} onCerrar={() => setDetalle(null)} ahora={ahora} />
     </div>
+  )
+}
+
+function DetallePedidoModal({ id, onCerrar, ahora }) {
+  const { data: p, isLoading } = useQuery({
+    queryKey: ['pedidos', 'detalle', String(id)],
+    queryFn: () => obtener(`/pedidos/${id}/`),
+    enabled: !!id,
+  })
+  return (
+    <Modal abierto={!!id} onCerrar={onCerrar} ancho="max-w-2xl" titulo={p ? `Pedido #${p.id} · ${p.etiqueta}` : 'Pedido'}>
+      {isLoading || !p ? (
+        <Cargando />
+      ) : (
+        <div className="grid gap-5 md:grid-cols-2">
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-pequeno text-texto-2">
+              <EstadoPedido pedido={p} />
+              <span>{p.origen === 'whatsapp' ? 'WhatsApp' : p.tipo_nombre} · {p.creado_por_nombre}</span>
+            </div>
+            <ItemsPedido pedido={p} />
+            {p.nota && <p className="rounded-lg bg-pagina px-3 py-2 text-pequeno">Nota: {p.nota}</p>}
+          </div>
+          <div>
+            <h3 className="mb-3 text-cuerpo">Registro de actualizaciones</h3>
+            <HistorialPedido eventos={p.eventos} ahora={ahora} />
+          </div>
+        </div>
+      )}
+    </Modal>
   )
 }

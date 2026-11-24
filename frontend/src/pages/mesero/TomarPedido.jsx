@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Minus, Plus, Star, TriangleAlert, X } from 'lucide-react'
+import { ArrowRightLeft, Minus, Plus, ShoppingBag, Star, TriangleAlert, X } from 'lucide-react'
 import { EncabezadoMovil } from '../../components/Layouts'
+import { SelectorMesa } from '../../components/Pedido'
 import { Boton, Cargando, Chip, ErrorCarga, EstadoBadge } from '../../components/ui'
 import { api, mensajeError, obtener } from '../../lib/api'
 import { useAvisar } from '../../lib/avisos'
@@ -10,9 +11,12 @@ import { dinero, hace } from '../../lib/formato'
 import { useSesion } from '../../lib/sesion'
 import { useEventos } from '../../lib/tiempoReal'
 
-/** 1B · Mesero — carta para tomar el pedido, con aviso de agotado en vivo. */
+/**
+ * 1B · Mesero — carta para tomar el pedido, con aviso de agotado en vivo.
+ * Rutas: /mesero/nuevo/mesa/:mesaId, /mesero/nuevo/llevar y /mesero/pedido/:pedidoId/agregar (anexar platos).
+ */
 export default function TomarPedido() {
-  const { tipo, mesaId } = useParams()
+  const { tipo, mesaId, pedidoId } = useParams()
   const { usuario } = useSesion()
   const nav = useNavigate()
   const qc = useQueryClient()
@@ -22,12 +26,18 @@ export default function TomarPedido() {
   const [nota, setNota] = useState('')
   const [cliente, setCliente] = useState('')
   const [aviso, setAviso] = useState(null)
+  const [eligiendoMesa, setEligiendoMesa] = useState(false)
 
   const { data: platos, isLoading, error, refetch } = useQuery({ queryKey: ['platos'], queryFn: () => obtener('/platos/') })
   const { data: mesa } = useQuery({
     queryKey: ['mesas', mesaId],
     queryFn: () => obtener(`/mesas/${mesaId}/`),
     enabled: !!mesaId,
+  })
+  const { data: pedido } = useQuery({
+    queryKey: ['pedidos', 'detalle', pedidoId],
+    queryFn: () => obtener(`/pedidos/${pedidoId}/`),
+    enabled: !!pedidoId,
   })
 
   // Aviso en vivo cuando la cocina marca un plato como agotado.
@@ -62,19 +72,24 @@ export default function TomarPedido() {
       return { ...c, [p.id]: n }
     })
 
+  const lineas = () => items.map(([plato, c]) => ({ plato: Number(plato), cantidad: c }))
   const enviar = useMutation({
     mutationFn: () =>
-      api.post('/pedidos/', {
-        tipo: tipo === 'mesa' ? 'mesa' : 'llevar',
-        mesa: mesaId ? Number(mesaId) : null,
-        cliente,
-        nota,
-        items: items.map(([plato, c]) => ({ plato: Number(plato), cantidad: c })),
-      }),
+      pedidoId
+        ? api.post(`/pedidos/${pedidoId}/agregar/`, { items: lineas() })
+        : api.post('/pedidos/', {
+            tipo: tipo === 'mesa' ? 'mesa' : 'llevar',
+            mesa: mesaId ? Number(mesaId) : null,
+            cliente,
+            nota,
+            items: lineas(),
+          }),
     onSuccess: ({ data }) => {
       qc.invalidateQueries({ queryKey: ['mesas'] })
-      avisar('Pedido enviado', 'exito', `${data.etiqueta} · la cocina ya lo está viendo.`)
-      nav(mesaId ? `/mesero/mesa/${mesaId}` : '/mesero/pedidos', { replace: true })
+      qc.invalidateQueries({ queryKey: ['pedidos'] })
+      avisar(pedidoId ? 'Platos agregados al pedido' : 'Pedido enviado', 'exito', `${data.etiqueta} · la cocina ya lo está viendo.`)
+      // Se abre el pedido para seguir su registro de actualizaciones.
+      nav(`/mesero/pedido/${data.id}`, { replace: true })
     },
     onError: (e) => {
       qc.invalidateQueries({ queryKey: ['platos'] })
@@ -82,11 +97,39 @@ export default function TomarPedido() {
     },
   })
 
-  const titulo = tipo === 'mesa' ? `Mesa ${mesa?.numero ?? ''} · Nuevo pedido` : 'Para llevar · Nuevo pedido'
+  const titulo = pedidoId
+    ? `Agregar platos · Pedido #${pedidoId}`
+    : tipo === 'mesa' ? `Mesa ${mesa?.numero ?? ''} · Nuevo pedido` : 'Para llevar · Nuevo pedido'
+  const atras = pedidoId ? `/mesero/pedido/${pedidoId}` : '/mesero'
 
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col bg-pagina md:border-x md:border-borde">
-      <EncabezadoMovil titulo={titulo} subtitulo={`Mesero: ${usuario.nombre}`} atras="/mesero" />
+      <EncabezadoMovil titulo={titulo} subtitulo={`Mesero: ${usuario.nombre}`} atras={atras} />
+
+      {/* A qué se anexa el pedido: se puede cambiar sin perder lo que ya se agregó. */}
+      {pedidoId ? (
+        <div className="mx-4 mt-3 rounded-xl bg-marca-suave px-4 py-3 text-pequeno text-marca">
+          Se anexan al pedido <strong>#{pedidoId}</strong>{pedido ? ` de ${pedido.etiqueta}` : ''}. La cocina los verá marcados como agregados.
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEligiendoMesa(true)}
+          className="mx-4 mt-3 flex items-center gap-3 rounded-xl border border-borde bg-superficie px-4 py-3 text-left hover:border-marca"
+        >
+          {tipo === 'mesa' ? <span className="text-h3 font-bold">Mesa {mesa?.numero ?? '…'}</span> : <ShoppingBag size={20} className="text-marca" />}
+          <span className="min-w-0 flex-1 text-pequeno text-texto-2">
+            {tipo === 'mesa'
+              ? mesa && mesa.estado !== 'libre'
+                ? 'Tiene cuenta abierta: este pedido se suma a esa cuenta'
+                : 'Mesa libre: se abre una cuenta nueva'
+              : 'Para llevar'}
+          </span>
+          <span className="flex items-center gap-1 text-pequeno font-semibold text-marca">
+            <ArrowRightLeft size={16} /> Cambiar
+          </span>
+        </button>
+      )}
 
       {aviso && (
         <div role="alert" className="animate-entrar mx-4 mt-3 flex items-start gap-3 rounded-xl bg-texto p-4 text-white">
@@ -110,7 +153,7 @@ export default function TomarPedido() {
         <ErrorCarga error={error} reintentar={refetch} />
       ) : (
         <div className="flex-1 space-y-4 p-4 pb-40">
-          {tipo !== 'mesa' && (
+          {!pedidoId && tipo !== 'mesa' && (
             <input className="campo" placeholder="Nombre del cliente" value={cliente} onChange={(e) => setCliente(e.target.value)} />
           )}
 
@@ -193,14 +236,32 @@ export default function TomarPedido() {
               })}
           </ul>
 
-          <textarea
-            className="campo min-h-20"
-            placeholder="Nota para cocina (opcional): una sin chicharrón, sin cebolla…"
-            value={nota}
-            onChange={(e) => setNota(e.target.value)}
-          />
+          {!pedidoId && (
+            <textarea
+              className="campo min-h-20"
+              placeholder="Nota para cocina (opcional): una sin chicharrón, sin cebolla…"
+              value={nota}
+              onChange={(e) => setNota(e.target.value)}
+            />
+          )}
         </div>
       )}
+
+      <SelectorMesa
+        abierto={eligiendoMesa}
+        actual={mesaId}
+        titulo="¿A qué mesa va este pedido?"
+        onCerrar={() => setEligiendoMesa(false)}
+        onElegir={(m) => {
+          setEligiendoMesa(false)
+          nav(`/mesero/nuevo/mesa/${m.id}`, { replace: true })
+        }}
+        extra={
+          <Boton variante="secundario" className="mt-4 w-full" onClick={() => { setEligiendoMesa(false); nav('/mesero/nuevo/llevar', { replace: true }) }}>
+            <ShoppingBag size={18} /> Es para llevar
+          </Boton>
+        }
+      />
 
       <footer className="fixed inset-x-0 bottom-0 z-20 mx-auto max-w-md border-t border-borde bg-superficie px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         {conProblema.length > 0 && (
@@ -222,7 +283,7 @@ export default function TomarPedido() {
             cargando={enviar.isPending}
             onClick={() => enviar.mutate()}
           >
-            Enviar a cocina
+            {pedidoId ? 'Agregar al pedido' : 'Enviar a cocina'}
           </Boton>
         </div>
       </footer>
